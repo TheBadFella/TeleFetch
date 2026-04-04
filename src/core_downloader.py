@@ -14,8 +14,26 @@ from telethon.tl.types import (
     MessageMediaPhoto,
     MessageMediaDocument
 )
+from resource_utils import get_project_root
+STATE_FILE = os.path.join(get_project_root(), "download_state.json")
+TASKS_FILE = os.path.join(get_project_root(), "active_tasks.json")
 
-STATE_FILE = "download_state.json"
+def load_active_tasks():
+    if os.path.exists(TASKS_FILE):
+        try:
+            with open(TASKS_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading tasks: {e}")
+            return []
+    return []
+
+def save_active_tasks(tasks):
+    try:
+        with open(TASKS_FILE, "w") as f:
+            json.dump(tasks, f)
+    except Exception as e:
+        print(f"Error saving tasks: {e}")
 
 def load_download_state():
     if os.path.exists(STATE_FILE):
@@ -39,14 +57,78 @@ async def fetch_channel(client, channel_input):
     Fetch a channel by username or ID.
     If input is pure digits or starts with -100, treat as integer ID.
     """
-    if str(channel_input).startswith("-100") or str(channel_input).isdigit():
-        channel_input = int(channel_input)
+    original_input = str(channel_input).strip()
     
-    channel = await client.get_entity(channel_input)
-    return channel
+    # Pre-processing: aggressively normalize numeric channel IDs
+    if original_input.isdigit() or (original_input.startswith("-") and original_input[1:].isdigit()):
+        clean_id = original_input.replace("-", "")
+        
+        # If the user included the '100' prefix but forgot the negative sign: 1001553086349
+        if clean_id.startswith("100") and len(clean_id) >= 12:
+            channel_input = int(f"-{clean_id}")
+        # If the user provided the raw short ID: 1553086349
+        elif not original_input.startswith("-") and len(original_input) >= 8:
+            channel_input = int(f"-100{original_input}")
+        else:
+            # It was either correctly formatted like -1001553086349 or it's a small group ID
+            channel_input = int(original_input)
+            
+        # Update original_input so fallback search uses the perfectly normalized -100... format
+        original_input = str(channel_input)
+            
+    try:
+        # First attempt: direct get_entity
+        channel = await client.get_entity(channel_input)
+        return channel
+    except Exception as e:
+        # Second attempt: if direct lookup fails (common for private entities),
+        # try to find it in ALL dialogs of the current user.
+        print(f"Direct lookup for {original_input} failed ({e}). Searching through dialogs... this may take a moment.")
+        active_count = 0
+        archived_count = 0
+        try:
+            # Check Active Dialogs
+            async for dialog in client.iter_dialogs():
+                active_count += 1
+                d_id = str(dialog.id)
+                o_id = str(original_input)
+                if d_id == o_id or d_id.replace("-100", "", 1) == o_id.replace("-100", "", 1):
+                    print(f"Found entity in active dialogs (checked {active_count}): {dialog.title}")
+                    return dialog.entity
+                    
+            # Check Archived Dialogs
+            print(f"Not in active dialogs (checked {active_count}). Searching archived dialogs...")
+            async for dialog in client.iter_dialogs(archived=True):
+                archived_count += 1
+                d_id = str(dialog.id)
+                o_id = str(original_input)
+                if d_id == o_id or d_id.replace("-100", "", 1) == o_id.replace("-100", "", 1):
+                    print(f"Found entity in archived dialogs (checked {archived_count}): {dialog.title}")
+                    return dialog.entity
+                    
+            print(f"Channel {original_input} was completely missing from all {active_count} active and {archived_count} archived chats.")
+        except Exception as dialog_err:
+            print(f"Dialog search also failed: {dialog_err}")
+                 
+        # Final attempt: if it's numeric and it failed, maybe try adding -100 if it lacks it
+        if isinstance(channel_input, int) and channel_input > 0 and not str(channel_input).startswith("-100"):
+            try:
+                alt_id = int(f"-100{channel_input}")
+                channel = await client.get_entity(alt_id)
+                return channel
+            except: pass
+            
+        error_msg = f"Telegram completely declined access to {channel_input}."
+        if "Could not find the input entity" in str(e):
+            error_msg += (
+                f"\n\nWe scanned all {active_count} active and {archived_count} archived dialogs on this account, and the ID {original_input} is not among them."
+                f"\n\nTo fix this:\n1. Open the channel on your phone to refresh it to the top of your chat list.\n2. Ensure you are logged into the correct Telegram account covering these chats.\n3. OR bypass this entirely by pasting the invite link (https://t.me/...) into the search bar."
+            )
+            
+        raise Exception(error_msg) # Re-raise with the helpful tip
 import time
 
-async def download_single_file(message, folder_name, progress_cb=None, complete_cb=None, cancel_event=None, max_speed_kb=None):
+async def download_single_file(client, channel, message, folder_name, progress_cb=None, complete_cb=None, cancel_event=None, max_speed_kb=None):
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -78,76 +160,100 @@ async def download_single_file(message, folder_name, progress_cb=None, complete_
             last_bytes = [0]
             cancelled_by_event = [False]
             
+            class PauseRequested(Exception): pass
+            
             async def internal_progress(current, total):
-                # Use a flag instead of raise - raising CancelledError inside
-                # a Telethon progress callback causes it to propagate incorrectly
-                # through Telethon's own download pipeline
                 if cancel_event and cancel_event.is_set():
-                    cancelled_by_event[0] = True
-                    return  # Just return; we'll check the flag after download
+                    raise PauseRequested()
                 
                 now = time.time()
                 elapsed = now - start_time[0]
-                speed_str = "0 KB/s"
-                
-                # Update speed every 0.1s to avoid jitter, and to allow for smoother throttling
                 if elapsed >= 0.1:
                     bytes_diff = current - last_bytes[0]
                     speed_kb_s = (bytes_diff / elapsed) / 1024
                     
-                    # Throttling Logic
                     if max_speed_kb and speed_kb_s > max_speed_kb:
-                        # compute how much time it *should* have taken
                         expected_time = (bytes_diff / 1024) / max_speed_kb
                         sleep_time = expected_time - elapsed
                         if sleep_time > 0:
                             await asyncio.sleep(sleep_time)
-                            now = time.time() # update now after sleeping
+                            now = time.time()
                             elapsed = now - start_time[0]
                             speed_kb_s = (bytes_diff / elapsed) / 1024
 
-                    if speed_kb_s > 1024:
-                        speed_str = f"{(speed_kb_s/1024):.1f} MB/s"
-                    else:
-                        speed_str = f"{sys.maxsize if speed_kb_s < 0 else int(speed_kb_s)} KB/s" if speed_kb_s < 0 else f"{int(speed_kb_s)} KB/s"
-                    
+                    speed_str = f"{(speed_kb_s/1024):.1f} MB/s" if speed_kb_s > 1024 else f"{int(speed_kb_s)} KB/s"
                     start_time[0] = now
                     last_bytes[0] = current
-
                     if progress_cb:
-                        # telethon total could be None
                         progress_cb(message.id, current, total or file_size, speed_str=speed_str)
 
-            dir_path = os.path.join(folder_name, "") # Enforce trailing slash for Telethon directory matching
-            file_path = await message.download_media(
-                file=dir_path,
-                progress_callback=internal_progress,
-            )
-            # Check if a pause was requested mid-download via flag
-            if cancelled_by_event[0]:
-                if complete_cb:
-                    complete_cb(message.id, paused=True, filepath=None)
-                break
+            dir_path = os.path.join(folder_name, "")
+            file_path = None
+            try:
+                file_path = await message.download_media(
+                    file=dir_path,
+                    progress_callback=internal_progress,
+                )
+            except PauseRequested:
+                if complete_cb: complete_cb(message.id, paused=True, filepath=None)
+                return
+            except AttributeError as attr_err:
+                if "location" in str(attr_err) and getattr(message, 'photo', None):
+                    # Fallback for Telethon 1.38.x PhotoSize bug
+                    from telethon.tl.types import InputPhotoFileLocation
+                    photo = message.photo
+                    # Pick largest size that isn't empty
+                    best_size = None
+                    if photo.sizes:
+                        # Just grab the last one that has a type
+                        for sz in reversed(photo.sizes):
+                            if hasattr(sz, 'type'):
+                                best_size = sz
+                                break
+                    
+                    if best_size:
+                        loc = InputPhotoFileLocation(
+                            id=photo.id,
+                            access_hash=photo.access_hash,
+                            file_reference=photo.file_reference,
+                            thumb_size=best_size.type
+                        )
+                        fname = f"Photo_{message.id}.jpg"
+                        file_path = os.path.join(folder_name, fname)
+                        try:
+                            await client.download_file(
+                                loc,
+                                file=file_path,
+                                progress_callback=internal_progress,
+                            )
+                        except PauseRequested:
+                            if complete_cb: complete_cb(message.id, paused=True, filepath=None)
+                            return
+                    else: raise
+                else: raise
+
             if complete_cb:
                 complete_cb(message.id, filepath=file_path)
             break
-                
+
         except asyncio.CancelledError:
-            # Genuine external coroutine cancellation (task.cancel() from outside)
-            if complete_cb:
-                complete_cb(message.id, paused=True, filepath=None)
+            if complete_cb: complete_cb(message.id, paused=True, filepath=None)
             break
         except Exception as e:
             if attempt < max_retries - 1:
                 wait_time = getattr(e, 'seconds', 2)
                 print(f"Error downloading {message.id}, retrying in {wait_time}s ({attempt+1}/{max_retries}): {e}")
                 await asyncio.sleep(wait_time)
+                if client and channel:
+                    try:
+                        refreshed = await client.get_messages(channel, ids=message.id)
+                        if refreshed: message = refreshed
+                    except: pass
             else:
                 print(f"Error downloading message {message.id} after {max_retries} attempts: {e}")
-                if complete_cb:
-                    complete_cb(message.id, paused=False) # Marked as complete to not block pipeline
+                if complete_cb: complete_cb(message.id, paused=False)
 
-async def download_in_batches_headless(messages, folder_name, batch_size, downloaded_state, progress_cb, complete_cb, task_cancel_event=None, max_speed_kb=None):
+async def download_in_batches_headless(client, channel, messages, folder_name, batch_size, downloaded_state, progress_cb, complete_cb, task_cancel_event=None, max_speed_kb=None):
     semaphore = asyncio.Semaphore(batch_size)
     
     def internal_complete(msg_id, paused=False, filepath=None):
@@ -162,7 +268,7 @@ async def download_in_batches_headless(messages, folder_name, batch_size, downlo
             if task_cancel_event and task_cancel_event.is_set():
                 if complete_cb: complete_cb(message.id, paused=True, filepath=None)
                 return
-            await download_single_file(message, folder_name, progress_cb, internal_complete, task_cancel_event, max_speed_kb)
+            await download_single_file(client, channel, message, folder_name, progress_cb, internal_complete, task_cancel_event, max_speed_kb)
 
     tasks = [download_message(m) for m in messages if m.id not in downloaded_state]
     if tasks:

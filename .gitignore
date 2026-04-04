@@ -9,3 +9,5 @@ downloads/
 __pycache__/
 *.pyc
 search_results.json
+*.patch
+*.pyi

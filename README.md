@@ -3,38 +3,40 @@
 [![GitHub Release](https://img.shields.io/github/v/release/vinodkr494/telegram-media-downloader?style=flat-square)](https://github.com/vinodkr494/telegram-media-downloader/releases/latest)
 [![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/vinodkr494/telegram-media-downloader/total?style=flat-square)](https://github.com/vinodkr494/telegram-media-downloader/releases)
 
-Telegram Bulk Media Downloader is a Python-based desktop app that lets you browse, filter, and bulk-download media from any Telegram channel or group — with a beautiful modern UI, smart deduplication, speed limiting, and category-based file browsing.
+🚀 **Bulk-download videos, images, PDFs, audio & more** from any Telegram channel or group. Features a **Premium PySide6 Dashboard** with high-performance analytics, **Global Queue Tracking** (Total progress % & Session usage), **Advanced Task Management** (Prioritize & Cancel), category browser, real-time search, parallel downloads, smart deduplication, speed limiter, proxy support, and desktop notifications.
 
----
+---## ✨ What's New in v2.5.0 (UI Polish & QoL Overhaul)
 
-## ✨ What's New in v2.3
+### 🎨 Professional UI Refresh
+Replaced legacy emoji-based navigation labels with **professional, high-quality icon assets**. Navigation is now cleaner, perfectly aligned, and uses HSL-tailored colors for better contrast in both Light and Dark modes.
 
-### 🌀 Animated Loading Spinner
-The "Fetch Media" overlay now shows a **braille animation** (`⠋⠙⤹⠸⠼⠴⠦⠧⠇⠏`) cycling every 80ms so the app never looks frozen during a channel scan.
+### 📊 Global Queue Analytics
+The new **Right-Aligned Status Bar** now tracks your entire session in real-time:
+- **Total Progress %**: See the completion percentage of your entire download queue.
+- **Session Usage**: Track exactly how much data (MB/GB) you've downloaded in the current session.
+- **Unified Speed**: Real-time calculation of total throughput across all active tasks.
 
-### 🔍 Real-time Search in Media Browser
-A search bar at the top of each category tab filters file rows **live as you type**. Find a specific file among 500+ results instantly without scrolling.
+### ⚡ Advanced Task Management
+Full control over your queue with dedicated buttons on every download card:
+- 🗑 **Cancel / Remove**: Stop a task and remove it from the queue with a single click.
+- ⬆ / ⬇ **Prioritize Tasks**: Reorder whole batches (cards) in the main queue to decide which entire group or channel downloads next.
+- 📂 **Quick Access**: Double-click any card to instantly open its download folder.
 
-### ✅ Live Selection Counter
-A `"X of Y files selected"` count bar sits between the file list and the Download button. It turns **green** as soon as you select files.
-
-### 🔔 Toast Notifications on Download Complete
-When a download queue finishes, a **dark pop-up** slides in from the bottom-right corner and auto-dismisses after 3 seconds.
-
-### 📥 Empty State Screens
-Home and Downloads tabs now show a friendly **placeholder illustration + helper text** instead of a blank page on fresh launch.
-
-### 🐛 Bug Fix: Modal Not Closing on Download
-Fixed a tuple-unpacking mismatch introduced in v2.3 that prevented `Download Selected` from closing the modal.
+### 🔔 Desktop Notifications & Tray Actions
+- **Completion Alerts**: Receive a native Windows/macOS/Linux notification when a whole batch is finished.
+- **Tray Context Menu**: Right-click the system icon to **Pause All** or **Resume All** without opening the window.
 
 ---
 
 ## Features
 
-- 🌀 **Animated Spinner** — braille animation on the Fetch overlay — no more frozen screen
+- 💎 **Premium Sidebar** — sleek, icon-based navigation with professional typography
+- 📊 **Global Dashboard Status** — real-time session stats, total progress %, and combined speed
+- 🔔 **Native Notifications** — system-level alerts when your downloads are ready
+- 🖱 **Intuitive Gestures** — double-click cards to open folders; auto-focus search on open
+- 🔄 **Queue Prioritization** — move entire download batches up or down to manage your queue
 - 🔍 **Media Browser Search** — live filter bar to find any file by name instantly
 - ✅ **Selection Counter** — "X of Y files selected" counter updates as you tick boxes
-- 🔔 **Toast Notifications** — bottom-right popup when a queue completes, auto-dismisses in 3s
 - 📥 **Empty State Screens** — friendly placeholders on Home and Downloads before any tasks are added
 - 📂 **Media Browser** — category-based file browser (Media, Files, Music, Links, GIFs)
 - ⚡ **Parallel Fetch** — all categories load simultaneously via `asyncio.gather` (~5x faster)
@@ -43,20 +45,31 @@ Fixed a tuple-unpacking mismatch introduced in v2.3 that prevented `Download Sel
 - 📊 **Per-file Progress Bars** — live speed display (KB/s / MB/s) per file
 - **Speed Limiter** — configurable max download speed in Settings
 - **Proxy Support** — SOCKS4, SOCKS5, HTTP, and MTProto configuration
-- **Theme Toggle** — Light and Dark mode from Settings
+- **Theme Toggle** — Light and Dark mode with persistent session saving
 - **Persistent Queue** — saves and restores on restart automatically
 - **Cross-Platform** — standalone executables for Windows, Linux, and macOS
 
+---
+
 ## Screenshots
 
-![Login Screen](screenshots/app_v2_login.png)
-![Phone Number Verification](screenshots/phone_verification.png)
-![Home View - Active Queue](screenshots/app_v2.png)
+<p align="center">
+  <img src="screenshots/screenshot_v2.4.1/login-v2.4.1.png" width="400" alt="Login Screen">
+  <img src="screenshots/screenshot_v2.4.1/otp-v2.4.1.png" width="400" alt="OTP Verification">
+</p>
+
+<p align="center">
+  <img src="screenshots/screenshot_v2.4.1/after_login_v2.4.1.png" width="800" alt="Home View">
+</p>
+
+---
 
 ## Requirements
 
 - Python 3.8+
 - Telegram API credentials (API ID and API Hash)
+
+---
 
 ## Installation
 
@@ -103,32 +116,66 @@ Fixed a tuple-unpacking mismatch introduced in v2.3 that prevented `Download Sel
 3. Click **🔍 Fetch Media** to open the **Media Browser**.
 4. Browse files by category — use **Select All** or check individual files.
 5. Click **Download Selected** to add them to your queue.
-6. Track live progress and speed in the **Downloads** tab.
+6. Track live progress, total queue stats, and session throughput in the **Downloads** tab.
 
 ### Resuming Downloads
 
-Progress is saved to `download_state.json`. Restart the app and your queue resumes automatically, skipping already-completed files.
+Progress is saved automatically. Restart the app and your queue resumes seamlessly, skipping already-completed files.
 
 ### Configure Concurrent Downloads
 
 Go to **Settings → Download Limit** to adjust how many files download simultaneously (default: 5).
 
-### Configure Speed Limit
-
-Go to **Settings → Max Download Speed** and drag the slider to your preferred cap. Set to 0 for unlimited.
-
-### Supported Media Types
-
-| Type | Format |
-|------|--------|
-| Videos | `.mp4`, `.mkv`, `.avi`, and more |
-| Images | `.jpg`, `.png`, `.webp`, and more |
-| PDFs | `.pdf` |
-| ZIP / Archives | `.zip`, `.rar`, `.7z` |
-| Audio | `.mp3`, `.ogg`, `.flac`, and more |
-| GIFs | Telegram animated GIFs |
+---
 
 ## Changelog
+
+### v2.5.0
+- 🎨 **UI Overhaul** — replaced legacy emoji-based navigation with professional, high-quality icon assets and refined QSS typography.
+- 📊 **Global Analytics** — introduced real-time session data, total completion %, and consolidated status bar metrics.
+- ⚡ **Queue Mastery** — added Cancel (Remove) and Prioritize (Up/Down) functionality to the download cards.
+- 🔔 **Native Feedback** — implemented desktop notifications for task completion and an enhanced tray context menu.
+- 🖱 **Ddouble-Click Gestures** — double-click task cards to jump directly to the download folder.
+- 🔍 **Search Focus** — auto-focuses the search bar upon opening the Media Browser for faster filtering.
+
+### v2.4.7
+- 💾 **Robust Persistence** — centralized all persistent files (`.env`, `config.json`, `download_state.json`, `active_tasks.json`, and `.session`) fixing persistence issues in standalone builds.
+- 🌓 **Improved .env Logic** — added automatic quote stripping for `API_ID` and `API_HASH` and persisted `PHONE` for a seamless login experience.
+- 🛡️ **Path Resolver Sync** — ensured all UI components and background workers use the centralized `get_project_root` helper.
+MainWindow, SettingsView, LoginView) and background workers to use the new centralized `get_project_root` helper.
+
+### v2.4.6
+
+### v2.4.5
+- ⏯️ **Pause Reliability** — implemented active task tracking to prevent duplicate background threads; clicking "Pause" now reliably stops all activity for that task immediately
+- 📐 **Sidebar Polish** — reduced layout margins and button margins to ensure "Light Mode" and "Dark Mode" labels fit within the 85px sidebar on all displays
+- 💾 **Persistent Resume** — fixed a state-management bug that caused paused tasks to auto-resume unexpectedly after a restart
+
+### v2.4.4
+- 🔗 **Invite-Link Download Fix** — fixed `FileReferenceExpiredError` for private channels joined via invite links by manually refreshing the message entity on retry
+- 🌓 **Cross-Platform Dark Mode Detection** — app now auto-detects OS dark mode at startup (Windows registry, macOS `defaults`, Linux `gsettings`/`$GTK_THEME`)
+- 🎨 **Startup Theme Fix** — eliminated black flash on Windows Dark Mode; sidebar toggle button now syncs to the detected theme on launch
+- 💾 **Theme Persistence** — user's chosen theme is saved to `config.json` and restored on next launch, overriding the system default
+
+### v2.4.3
+- 🆔 **Robust Numeric IDs** — aggressively normalizes private channel numeric IDs (automatically applying `-100` prefixes) to prevent `PeerUser` fetch errors
+- 📦 **Deep Dialog Scanning** — automatically requests and searches all `Archived` dialogs if a private channel ID isn't found in the active chat list
+- 🛑 **Error Diagnostics** — updated MainWindow status tracking to avoid getting stuck "Fetching..." forever when an ID lookup fundamentally fails
+
+### v2.4.2
+- 🎭 **Premium Card UI** — implemented a sleek card-based layout for the media browser tabs
+- 💾 **Persistent Themes** — fixed theme restoration bug, ensuring light/dark mode sticks across sessions
+- 🧹 **UI Cleanup** — refined empty state logic and dynamic visibility of queue controls
+- 🐞 **General Fixes** — resolved several minor layout and focus issues for a more stable experience
+
+### v2.4.1
+- 🚀 **Full PySide6 Rewrite** — migrated from CustomTkinter for native performance
+- 🏗️ **Modular UI** — sidebar navigation with dedicated views (Home, Queue, Settings)
+- 🌑 **Premium Theming** — full QSS-based Light/Dark mode support
+- 🔒 **Enhanced Auth** — multi-step Phone/OTP/2FA login flow
+- 📊 **Improved Queue** — per-task download cards with robust pause/resume/cancel
+- 📁 **Modular Workers** — thread-safe `TelegramWorker` for background operations
+- ⚙️ **Config Persistence** — settings now save to `config.json` automatically
 
 ### v2.3.0
 - ✅ Animated braille spinner on the Fetch Media overlay
@@ -196,9 +243,15 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 ## Acknowledgments
 
 - [Telethon](https://github.com/LonamiWebs/Telethon) — Telegram API integration
-- [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) — Beautiful modern UI widgets
+- [PySide6](https://pypi.org/project/PySide6/) — Native Python bindings for Qt WebEngine/Widgets
 - [cryptg](https://github.com/LonamiWebs/cryptg) — C-based crypto for fast downloads
 - [Pillow](https://python-pillow.org/) — Image processing
+
+## 🌟 About The Project
+
+**Telegram Bulk Media Downloader** is a high-performance, open-source initiative dedicated to providing a premium, desktop-native solution for archiving and managing Telegram content. 
+
+Our mission is to bridge the gap between complex terminal-based downloaders and the user-friendly experience that modern creators and researchers deserve. By combining the robust [Telethon](https://github.com/LonamiWebs/Telethon) engine with a world-class **PySide6 Dashboard**, we've created a tool that is both incredibly powerful and effortless to use.
 
 ---
 
