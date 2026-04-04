@@ -9,6 +9,96 @@ import os
 from resource_utils import get_project_root
 
 CONFIG_FILE = os.path.join(get_project_root(), "config.json")
+ENV_FILE = os.path.join(get_project_root(), ".env")
+PROXY_USER_ENV_KEY = "PROXY_USER"
+PROXY_PASS_ENV_KEY = "PROXY_PASS"
+
+
+def _parse_env_value(raw_value):
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        if value[0] == '"':
+            try:
+                return json.loads(value)
+            except Exception:
+                pass
+        return value[1:-1]
+    return value
+
+
+def _format_env_value(value):
+    if value == "":
+        return ""
+    if any(ch.isspace() for ch in value) or any(ch in value for ch in '#=\\"'):
+        return json.dumps(value)
+    return value
+
+
+def _load_env_values():
+    env_values = {}
+    if not os.path.exists(ENV_FILE):
+        return env_values
+
+    try:
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, value = stripped.split("=", 1)
+                env_values[key.strip()] = _parse_env_value(value)
+    except Exception as e:
+        print(f"Error loading env values: {e}")
+
+    return env_values
+
+
+def _save_env_values(updates):
+    lines = []
+    if os.path.exists(ENV_FILE):
+        try:
+            with open(ENV_FILE, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception as e:
+            print(f"Error reading env file: {e}")
+
+    new_lines = []
+    handled_keys = set()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            new_lines.append(line if line.endswith("\n") else f"{line}\n")
+            continue
+
+        key, _ = line.split("=", 1)
+        key = key.strip()
+        if key not in updates:
+            new_lines.append(line if line.endswith("\n") else f"{line}\n")
+            continue
+
+        handled_keys.add(key)
+        value = updates[key]
+        if value:
+            new_lines.append(f"{key}={_format_env_value(value)}\n")
+
+    for key, value in updates.items():
+        if key not in handled_keys and value:
+            new_lines.append(f"{key}={_format_env_value(value)}\n")
+
+    try:
+        with open(ENV_FILE, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+    except Exception as e:
+        print(f"Error writing env file: {e}")
+
+
+def _sanitize_config(config_data):
+    sanitized = dict(config_data)
+    proxy = dict(sanitized.get("proxy", {}))
+    proxy.pop("user", None)
+    proxy.pop("pass", None)
+    sanitized["proxy"] = proxy
+    return sanitized
 
 def load_config():
     default_config = {
@@ -27,22 +117,31 @@ def load_config():
     }
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, "r") as f:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                proxy_data = data.pop("proxy", {})
                 default_config.update(data)
+                if isinstance(proxy_data, dict):
+                    default_config["proxy"].update(proxy_data)
         except Exception as e:
             print(f"Error loading config: {e}")
+
+    env_values = _load_env_values()
+    proxy = default_config.get("proxy", {})
+    proxy["user"] = env_values.get(PROXY_USER_ENV_KEY, proxy.get("user", ""))
+    proxy["pass"] = env_values.get(PROXY_PASS_ENV_KEY, proxy.get("pass", ""))
     return default_config
 
 def save_config(config_data):
     try:
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(config_data, f, indent=4)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(_sanitize_config(config_data), f, indent=4)
     except Exception as e:
         print(f"Error saving config: {e}")
 
 class SettingsView(QWidget):
     logoutRequested = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_ui()
@@ -213,12 +312,14 @@ class SettingsView(QWidget):
                 "enabled": self.chk_enable_proxy.isChecked(),
                 "type": self.combo_proxy_type.currentText(),
                 "host": self.input_proxy_host.text(),
-                "port": self.input_proxy_port.text(),
-                "user": self.input_proxy_user.text(),
-                "pass": self.input_proxy_pass.text()
+                "port": self.input_proxy_port.text()
             }
         }
         save_config(config)
+        _save_env_values({
+            PROXY_USER_ENV_KEY: self.input_proxy_user.text(),
+            PROXY_PASS_ENV_KEY: self.input_proxy_pass.text()
+        })
         # Notify user it was saved properly
         QMessageBox.information(self, "Settings Saved", "Configuration saved successfully!")
 

@@ -3,6 +3,8 @@ venv/
 .env.local
 *.session
 *.session-journal
+*.session-wal
+*.session-shm
 active_tasks.json
 download_state.json
 downloads/
@@ -11,3 +13,4 @@ __pycache__/
 search_results.json
 *.patch
 *.pyi
+.venv

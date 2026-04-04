@@ -36,6 +36,8 @@ class WorkerSignals(QObject):
 
 
 class TelegramWorker(QThread):
+    LOGIN_TIMEOUT_SECONDS = 30
+
     def __init__(self, session_name, api_id, api_hash, parent=None):
         super().__init__(parent)
         self.session_name = session_name
@@ -115,13 +117,18 @@ class TelegramWorker(QThread):
     # -------------------------------------------------------------------------
     async def check_auth(self):
         try:
-            await self.client.connect()
-            if not await self.client.is_user_authorized():
+            await asyncio.wait_for(self.client.connect(), timeout=self.LOGIN_TIMEOUT_SECONDS)
+            if not await asyncio.wait_for(self.client.is_user_authorized(), timeout=self.LOGIN_TIMEOUT_SECONDS):
                 self.signals.auth_needed.emit()
             else:
                 # Pre-fetch dialogs to populate entity cache (helps resolving numeric IDs)
-                await self.client.get_dialogs(limit=50)
+                await asyncio.wait_for(self.client.get_dialogs(limit=50), timeout=self.LOGIN_TIMEOUT_SECONDS)
                 self.signals.auth_success.emit()
+        except asyncio.TimeoutError:
+            self.signals.auth_error.emit(
+                f"Telegram connection timed out after {self.LOGIN_TIMEOUT_SECONDS} seconds. "
+                "Please check your internet connection, VPN/proxy settings, and Telegram API credentials, then try again."
+            )
         except Exception as e:
             self.signals.auth_error.emit(str(e))
             
@@ -137,14 +144,19 @@ class TelegramWorker(QThread):
                 
                 session_full_path = os.path.join(get_project_root(), self.session_name)
                 self.client = TelegramClient(session_full_path, self.api_id, self.api_hash, loop=self.loop)
-                await self.client.connect()
+                await asyncio.wait_for(self.client.connect(), timeout=self.LOGIN_TIMEOUT_SECONDS)
                 
-                if not await self.client.is_user_authorized():
-                    await self.client.send_code_request(phone)
+                if not await asyncio.wait_for(self.client.is_user_authorized(), timeout=self.LOGIN_TIMEOUT_SECONDS):
+                    await asyncio.wait_for(self.client.send_code_request(phone), timeout=self.LOGIN_TIMEOUT_SECONDS)
                     self.signals.code_needed.emit(phone)
                 else:
-                    await self.client.get_dialogs(limit=50)
+                    await asyncio.wait_for(self.client.get_dialogs(limit=50), timeout=self.LOGIN_TIMEOUT_SECONDS)
                     self.signals.auth_success.emit()
+            except asyncio.TimeoutError:
+                self.signals.auth_error.emit(
+                    f"Telegram connection timed out after {self.LOGIN_TIMEOUT_SECONDS} seconds. "
+                    "Please check your internet connection, VPN/proxy settings, and Telegram API credentials, then try again."
+                )
             except Exception as e:
                 self.signals.auth_error.emit(str(e))
                 

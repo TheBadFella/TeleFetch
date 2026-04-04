@@ -10,6 +10,7 @@ from PySide6.QtGui import QIcon, QPixmap, QDesktopServices
 from ui.components.download_card import DownloadCard
 from ui.components.media_browser import MediaBrowserDialog
 from ui.components import auth_dialogs
+from ui.views.cleanup_view import CleanupView
 from ui.views.settings_view import SettingsView
 from ui.views.downloads_view import DownloadsView
 from ui.views.login_view import LoginView
@@ -139,6 +140,9 @@ class MainWindow(QMainWindow):
             self.worker.stop()
             if not self.worker.wait(2000):
                 pass 
+
+        if hasattr(self, "page_cleanup") and self.page_cleanup:
+            self.page_cleanup.stop()
                 
         event.accept()
 
@@ -181,16 +185,19 @@ class MainWindow(QMainWindow):
         # 2. Nav Buttons (Now using original icons from assets)
         self.btn_home = self._create_nav_button("Home", "home.png", True)
         self.btn_queue = self._create_nav_button("Queue", "download.png")
+        self.btn_cleanup = self._create_nav_button("Cleanup", "broom.svg")
         self.btn_settings = self._create_nav_button("Settings", "setting.png")
         self.btn_about = self._create_nav_button("About", "info.png")
 
         self.btn_home.clicked.connect(lambda: self.switch_page("Home", 0))
         self.btn_queue.clicked.connect(lambda: self.switch_page("Queue", 1))
-        self.btn_settings.clicked.connect(lambda: self.switch_page("Settings", 2))
+        self.btn_cleanup.clicked.connect(lambda: self.switch_page("Cleanup", 2))
+        self.btn_settings.clicked.connect(lambda: self.switch_page("Settings", 3))
         self.btn_about.clicked.connect(lambda: self.switch_page("About", -1))
 
         sidebar_layout.addWidget(self.btn_home)
         sidebar_layout.addWidget(self.btn_queue)
+        sidebar_layout.addWidget(self.btn_cleanup)
         sidebar_layout.addWidget(self.btn_settings)
         sidebar_layout.addStretch()
         sidebar_layout.addWidget(self.btn_about)
@@ -242,13 +249,15 @@ class MainWindow(QMainWindow):
         self.setup_home_page()
         
         self.page_queue = DownloadsView()
+        self.page_cleanup = CleanupView()
         self.page_settings = SettingsView()
         self.page_login = LoginView()
         
         self.stacked_widget.addWidget(self.page_home)   # Index 0
         self.stacked_widget.addWidget(self.page_queue)  # Index 1
-        self.stacked_widget.addWidget(self.page_settings) # Index 2
-        self.stacked_widget.addWidget(self.page_login)  # Index 3
+        self.stacked_widget.addWidget(self.page_cleanup) # Index 2
+        self.stacked_widget.addWidget(self.page_settings) # Index 3
+        self.stacked_widget.addWidget(self.page_login)  # Index 4
         
         # Connect Login signals
         self.page_login.login_started.connect(self.worker.start_login)
@@ -348,9 +357,13 @@ class MainWindow(QMainWindow):
             self.header.hide()
             self.stacked_widget.setCurrentIndex(1)
             self.btn_queue.setChecked(True)
-        elif "Settings" in item_text:
+        elif "Cleanup" in item_text:
             self.header.hide()
             self.stacked_widget.setCurrentIndex(2)
+            self.btn_cleanup.setChecked(True)
+        elif "Settings" in item_text:
+            self.header.hide()
+            self.stacked_widget.setCurrentIndex(3)
             self.btn_settings.setChecked(True)
         elif "About" in item_text:
             self.show_about_dialog()
@@ -358,7 +371,8 @@ class MainWindow(QMainWindow):
             curr = self.stacked_widget.currentIndex()
             if curr == 0: self.btn_home.setChecked(True)
             elif curr == 1: self.btn_queue.setChecked(True)
-            elif curr == 2: self.btn_settings.setChecked(True)
+            elif curr == 2: self.btn_cleanup.setChecked(True)
+            elif curr == 3: self.btn_settings.setChecked(True)
         else:
             self.header.hide()
 
