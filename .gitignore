@@ -14,3 +14,12 @@ search_results.json
 *.patch
 *.pyi
 .venv
+
+# Database & snapshots
+downloader.db
+*.db
+*.db-journal
+*.bak
+config.json
+dist/
+build

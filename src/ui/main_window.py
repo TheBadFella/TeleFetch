@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QLineEdit, QScrollArea, QFrame,
     QMessageBox, QToolButton, QSizePolicy, QSystemTrayIcon, QMenu, QStatusBar
 )
-from PySide6.QtCore import Qt, QSize, QUrl
+from PySide6.QtCore import Qt, QSize, QUrl, QTimer
 from PySide6.QtGui import QIcon, QPixmap, QDesktopServices
 from ui.components.download_card import DownloadCard
 from ui.components.media_browser import MediaBrowserDialog
@@ -14,26 +14,35 @@ from ui.views.cleanup_view import CleanupView
 from ui.views.settings_view import SettingsView
 from ui.views.downloads_view import DownloadsView
 from ui.views.login_view import LoginView
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QAction
 from resource_utils import get_resource_path
 from utils.update_checker import UpdateChecker
 
 class MainWindow(QMainWindow):
     def __init__(self, telegram_worker, version="unknown"):
         super().__init__()
+        print("DEBUG: MainWindow __init__ started")
         self.worker = telegram_worker
         self.version = version
         self.setWindowTitle(f"TG Media Downloader v{version} (PySide6)")
-        self.resize(1100, 750)
+        self.resize(1100, 700)
+        self.setMinimumSize(750, 500)
         self._is_authenticating = False
         self._tasks_loaded = False
+        self._reselect_task_id = None # Current task being re-selected
+        self._active_media_browser = None # Current open browser dialog
         
+        print("DEBUG: Setting up UI")
         self.setup_ui()
+        print("DEBUG: Connecting signals")
         self.connect_signals()
+        print("DEBUG: Setting up tray")
         self.setup_tray()
         self._session_downloaded = 0
         self._last_speed_check = 0
+        print("DEBUG: Checking for updates")
         self.check_for_updates()
+        print("DEBUG: MainWindow __init__ DONE")
 
     def check_for_updates(self):
         self.update_checker = UpdateChecker(self.version, self)
@@ -63,9 +72,18 @@ class MainWindow(QMainWindow):
         <h2 style='color: #2196F3;'>TG Media Downloader</h2>
         <p><b>Version:</b> v{self.version}</p>
         <p>A modern, high-performance Telegram media downloader built with PySide6 and Telethon.</p>
+        <ul style='color: #555; padding-left: 20px;'>
+            <li>✨ <b>Instant Loading:</b> Zero-wait cached media browsing.</li>
+            <li>⚡ <b>Byte-Range Resuming:</b> Flawless pause & resume via explicit offsets.</li>
+            <li>🗄️ <b>SQLite Persistence:</b> Robust, crash-proof active queues.</li>
+        </ul>
         <hr/>
-        <p>Enjoying the app? Consider supporting development by starring our repository!</p>
-        <p><a href='https://github.com/vinodkr494/telegram-media-downloader' style='color: #FFC107; font-weight: bold; font-size: 14px;'>⭐ Star on GitHub</a></p>
+        <p>Enjoying the app? Consider supporting development by starring our repository or sponsoring!</p>
+        <p>
+            <a href='https://github.com/vinodkr494/telegram-media-downloader' style='color: #FFC107; font-weight: bold; font-size: 14px;'>⭐ Star on GitHub</a>
+            &nbsp;&nbsp;|&nbsp;&nbsp;
+            <a href='https://github.com/sponsors/vinodkr494' style='color: #EF4444; font-weight: bold; font-size: 14px;'>❤️ Sponsor & Donate</a>
+        </p>
         <br/>
         <p style='font-size: 10px; color: #888;'>&copy; 2026 Vinodkr494. Licensed under MIT.</p>
         """
@@ -267,6 +285,7 @@ class MainWindow(QMainWindow):
         # Connect Queue Global Buttons
         self.page_queue.btn_pause_all.clicked.connect(self.pause_all_downloads)
         self.page_queue.btn_resume_all.clicked.connect(self.resume_all_downloads)
+        self.page_queue.reFetchRequested.connect(self.re_fetch_from_history)
         
         content_layout.addWidget(self.stacked_widget)
 
@@ -327,7 +346,7 @@ class MainWindow(QMainWindow):
         search_input_layout.addWidget(self.input_channel, stretch=1)
         search_input_layout.addWidget(self.btn_fetch)
         
-        lbl_hint = QLabel("Tip: enter @username, https://t.me/username, or the numeric channel ID")
+        lbl_hint = QLabel("Tip: enter @username, https://t.me/username, numeric channel ID, or channelID_topicID")
         lbl_hint.setObjectName("MutedText")
         lbl_hint.setWordWrap(True)
         
@@ -377,12 +396,18 @@ class MainWindow(QMainWindow):
             self.header.hide()
 
     def toggle_theme(self):
-        import ui.app as main_app
-        from ui.views.settings_view import load_config
-        cfg = load_config()
-        is_dark = not cfg.get("dark_mode", False)
-        main_app.apply_theme(is_dark)
-        self.update_theme_icon()
+        # 🛡️ Optimization: Block signals to avoid massive redraw cascades while QSS is applying
+        self.setUpdatesEnabled(False)
+        try:
+            import ui.app as main_app
+            from ui.views.settings_view import load_config
+            cfg = load_config()
+            is_dark = not cfg.get("dark_mode", False)
+            main_app.apply_theme(is_dark)
+            self.update_theme_icon()
+        finally:
+            self.setUpdatesEnabled(True)
+            self.repaint() # Force a clean refresh at the end
 
     def update_theme_icon(self):
         from ui.views.settings_view import load_config
@@ -422,7 +447,7 @@ class MainWindow(QMainWindow):
             self.page_queue.active_layout.removeWidget(card)
             card.deleteLater()
             del self.card_widgets[task_id]
-            self.page_queue.add_completed_item(title, folder_name)
+            self.page_queue.add_completed_item(title, folder_name, task_id)
             
             # Tray notification
             self.tray_icon.showMessage(
@@ -457,35 +482,82 @@ class MainWindow(QMainWindow):
         self.load_active_tasks_from_worker()
         
     def load_active_tasks_from_worker(self):
+        print("DEBUG: load_active_tasks_from_worker started")
         if self._tasks_loaded:
+            print("DEBUG: tasks already loaded, skipping")
             return
         self._tasks_loaded = True
         
-        from core_downloader import load_active_tasks, save_active_tasks
-        tasks = load_active_tasks()
-        # Initial deduplication of the file itself
-        seen = set()
-        deduped = []
-        for t in tasks:
-            key = (str(t.get("channel_input")), t.get("media_id"))
-            if key not in seen:
-                seen.add(key)
-                deduped.append(t)
-        
-        if len(deduped) != len(tasks):
-            save_active_tasks(deduped)
-            tasks = deduped
-
-        for t in tasks:
-            self.worker.start_download(
-                channel_input=t.get("channel_input"),
-                media_id=t.get("media_id", 6),
-                download_path=t.get("download_path", "downloads"),
-                download_limit=t.get("download_limit", 5),
-                max_speed_kb=t.get("max_speed_kb", 0),
-                is_paused=t.get("paused", True),
-                selected_message_ids=t.get("selected_message_ids", None)
-            )
+        try:
+            from core_downloader import load_active_tasks, save_active_tasks
+            tasks = load_active_tasks()
+            if not isinstance(tasks, list):
+                print(f"Warning: active_tasks.json is not a list. Type: {type(tasks)}")
+                tasks = []
+                
+            # Initial deduplication
+            seen = set()
+            deduped = []
+            for t in tasks:
+                if not isinstance(t, dict): continue
+                key = (str(t.get("channel_input")), t.get("media_id"))
+                if key not in seen:
+                    seen.add(key)
+                    deduped.append(t)
+            
+            if len(deduped) != len(tasks):
+                save_active_tasks(deduped)
+                tasks = deduped
+            
+            # 🟢 Smart Startup Loader
+            for i, t in enumerate(tasks):
+                if not isinstance(t, dict): continue
+                chan = t.get("channel_input")
+                media = t.get("media_id", 6)
+                print(f"DEBUG: Processing task {i}: {chan}_{media}")
+                if not chan: continue
+                
+                is_paused = bool(t.get("paused", True))
+                
+                # If it's paused, just show the card (no network)
+                if is_paused:
+                    # In UI, we don't 'clean' the ID anymore, we use what's in the task
+                    # but ensure we handle the -100 prefix consistently.
+                    ch_id_full = str(chan)
+                    m_id = t.get('media_id', 6)
+                    self.add_download_card({
+                        "task_id": f"{ch_id_full}_{m_id}",
+                        "title": t.get("title") or f"Saved Task: {chan}",
+                        "is_paused": True,
+                        "download_path": t.get("download_path", "downloads"),
+                        "download_limit": t.get("download_limit", 5),
+                        "max_speed_kb": t.get("max_speed_kb", 0),
+                        "media_type": m_id,
+                        "completed": t.get("completed", 0),
+                        "folder_name": t.get("folder_name") or t.get("download_path", "downloads")
+                    }, t.get("total_items", 0))
+                else:
+                    # Stagger starts to avoid UI choking
+                    def delayed_start(t_data=t):
+                        try:
+                            self.worker.start_download(
+                                channel_input=t_data.get("channel_input"),
+                                media_id=t_data.get("media_id", 6),
+                                download_path=t_data.get("download_path", "downloads"),
+                                download_limit=t_data.get("download_limit", 5),
+                                max_speed_kb=t_data.get("max_speed_kb", 0),
+                                is_paused=False,
+                                selected_message_ids=t_data.get("selected_message_ids", None)
+                            )
+                        except Exception as e:
+                            print(f"Startup task error: {e}")
+                            
+                    QTimer.singleShot(max(10, i * 500), delayed_start)
+                    
+        except Exception as startup_err:
+            print(f"Critical startup loading error: {startup_err}")
+            import traceback
+            traceback.print_exc()
         
     def on_fetch_clicked(self):
         channel = self.input_channel.text().strip()
@@ -493,40 +565,147 @@ class MainWindow(QMainWindow):
         
         self.btn_fetch.setText("Fetching...")
         self.btn_fetch.setEnabled(False)
-        self.worker.fetch_media_list(channel)
+        from PySide6.QtWidgets import QApplication
+        QApplication.processEvents()
+        
+        # 🚀 Instant Load from Cache to "WOW" the user
+        from database import get_cached_media
+        cached = get_cached_media(channel)
+        if cached:
+            # Reconstruct categorized dict from DB rows
+            c_dict = {k.lower(): [] for k in ["Media", "Files", "ZIPs", "Music", "Voice", "Links", "GIFs", "Chat", "All"]}
+            import collections
+            MockMsg = collections.namedtuple('MockMsg', ['id', 'message', 'date', 'size', 'media_type', 'is_mock'])
+            for row in cached:
+                m = MockMsg(id=row["msg_id"], message=row["title"], date=row["date"], size=row["size"], media_type=row["media_type"], is_mock=True)
+                cat = row["media_type"].lower()
+                if cat in c_dict:
+                    c_dict[cat].append(m)
+                
+                # ZIPs also belong in Files
+                if cat == 'zips':
+                    c_dict['files'].append(m)
+                    
+                c_dict["all"].append(m)
+                
+            for k in c_dict:
+                c_dict[k].sort(key=lambda x: x.id, reverse=True)
+            
+            # Show dialog immediately with cached data
+            # To avoid blocking the background fetch signal, we use a single shot timer
+            QTimer.singleShot(0, lambda: self.show_media_browser(channel, None, c_dict))
+
+        from ui.views.settings_view import load_config
+        cfg = load_config()
+        fetch_limit = cfg.get("initial_fetch_limit", 2000)
+        self.worker.fetch_media_list(channel, limit=fetch_limit)
 
     def show_media_browser(self, channel_input, channel_obj, messages_dict):
+        # 🔄 Update existing dialog if it's already open (Instant Loading Flow)
+        if self._active_media_browser and self._active_media_browser.isVisible():
+            self._active_media_browser.refresh_content(messages_dict)
+            return
+
+        # 🔄 Selection Persistence Reset
+        if self._reselect_task_id and self._reselect_task_id in self.card_widgets:
+            self.card_widgets[self._reselect_task_id].set_reselect_loading(False)
+            
         self.btn_fetch.setText("🔍 Fetch Media")
         self.btn_fetch.setEnabled(True)
         self.input_channel.clear()
         
-        title = getattr(channel_obj, 'title', str(channel_obj.id))
-        dialog = MediaBrowserDialog(title, messages_dict, self)
+        # If we came from cache, channel_obj might be None
+        if not channel_obj:
+            title = str(channel_input)
+        else:
+            title = getattr(channel_obj, 'title', None)
+            if not title:
+                first = getattr(channel_obj, 'first_name', '') or ''
+                last = getattr(channel_obj, 'last_name', '') or ''
+                title = f"{first} {last}".strip()
+            if not title:
+                title = getattr(channel_obj, 'username', None)
+            if not title:
+                title = getattr(channel_obj, 'id', str(channel_input))
+            title = str(title)
+        
+        # 🌙 Theme Support
+        from ui.views.settings_view import load_config
+        cfg = load_config()
+        is_dark = cfg.get("dark_mode", False)
+
+        # 🔄 Selection Persistence for Re-select from SQLite
+        existing_ids = []
+        if self._reselect_task_id:
+            from database import get_task_db
+            try:
+                ch_in, m_id_str = self._reselect_task_id.rsplit('_', 1)
+                task_data = get_task_db(ch_in, int(m_id_str))
+                if task_data:
+                    existing_ids = task_data.get("selected_message_ids", [])
+            except: pass
+            
+        dialog = MediaBrowserDialog(title, messages_dict, self, previous_selected_ids=existing_ids, is_dark=is_dark)
+        self._active_media_browser = dialog
         
         if dialog.exec():
             selected_msgs = dialog.get_selected_messages()
             if not selected_msgs:
+                self._active_media_browser = None
                 return # they selected nothing
                 
             selected_ids = [m.id for m in selected_msgs]
-            from ui.views.settings_view import load_config
-            cfg = load_config()
+            
+            # If re-selecting, we use existing task_id
+            target_task_id = self._reselect_task_id
+            self._reselect_task_id = None # Clear context
+            
             self.worker.start_download(
                 channel_input=channel_input, 
                 media_id=6, # 6 is ALL
                 download_path=cfg.get("download_path", "downloads"), 
                 download_limit=cfg.get("download_limit", 5), 
                 max_speed_kb=cfg.get("max_speed_kb", 0),
-                selected_message_ids=selected_ids
+                selected_message_ids=selected_ids,
+                task_id=target_task_id # If this is set, worker will update existing task
             )
+        
+        self._active_media_browser = None
 
     def on_fetch_error(self, channel, err_msg):
+        if self._reselect_task_id and self._reselect_task_id in self.card_widgets:
+            self.card_widgets[self._reselect_task_id].set_reselect_loading(False)
+            self._reselect_task_id = None
+            
         self.btn_fetch.setText("🔍 Fetch Media")
         self.btn_fetch.setEnabled(True)
         QMessageBox.critical(self, "Fetch Error", f"Failed to fetch content for {channel}:\n{err_msg}")
 
     def add_download_card(self, data, total_items):
         task_id = data["task_id"]
+        
+        # 🛡️ SMART LOOKUP: If we can't find by task_id, look for a 'ghost' card that was
+        # started by username/input but now has this resolved ID.
+        if task_id not in self.card_widgets:
+            ch_resolved = str(data.get("channel_input", ""))
+            original_in = str(data.get("original_input", ""))
+            m_id = data.get("media_id", 6)
+            
+            for old_id, card in list(self.card_widgets.items()):
+                old_chan = old_id.rsplit('_', 1)[0]
+                # Match by original user input OR by numeric ID if it was partially resolved
+                # We also check for -100 stripped versions to be super safe.
+                if (old_chan == original_in or 
+                    old_chan == ch_resolved or 
+                    old_chan.replace('-100', '', 1) == ch_resolved.replace('-100', '', 1)):
+                    
+                    print(f"DEBUG: Successfully hijacked ghost card {old_id} -> {task_id}")
+                    # Re-map the card in our tracking dict
+                    del self.card_widgets[old_id]
+                    self.card_widgets[task_id] = card
+                    card.task_id = task_id # Update card's own property
+                    break
+
         if task_id in self.card_widgets:
             # Refresh placeholder card with real metadata
             card = self.card_widgets[task_id]
@@ -539,6 +718,7 @@ class MainWindow(QMainWindow):
             )
             return
             
+        print(f"DEBUG: Creating new card for {task_id}")
         is_paused = data.get("is_paused", False)
         card = DownloadCard(
             task_id=task_id,
@@ -557,6 +737,12 @@ class MainWindow(QMainWindow):
         self.page_queue.active_layout.addWidget(card)
         self.card_widgets[task_id] = card
         self.page_queue.set_controls_visible(True)
+        
+        # Connect signals
+        card.reselectRequested.connect(self.reselect_task_media)
+        card.removeRequested.connect(self.remove_task)
+        card.moveUpRequested.connect(self.move_task_up)
+        card.moveDownRequested.connect(self.move_task_down)
 
     def move_card(self, card, direction):
         """direction: -1 (up), 1 (down)"""
@@ -597,9 +783,14 @@ class MainWindow(QMainWindow):
         # Session stats
         session_text = f" | Session: {humanize.naturalsize(self._session_downloaded)}" if self._session_downloaded > 0 else ""
         
-        self.lbl_status_msg.setText(
-            f"🟢 Speed: {speed_text}{session_text} | Total Progress: {progress_pct:.1f}% | Queue: {len(self.card_widgets)} tasks"
-        )
+        status_text = f"🟢 Speed: {speed_text}{session_text} | Total Progress: {progress_pct:.1f}% | Queue: {len(self.card_widgets)} tasks"
+        self.lbl_status_msg.setText(status_text)
+        
+        # 🟢 Tray Tooltip
+        tray_tip = f"TG Downloader - {speed_text}\nProgress: {progress_pct:.1f}% ({total_completed}/{total_items})"
+        if len(self.card_widgets) > 1:
+            tray_tip += f"\nQueue: {len(self.card_widgets)} active tasks"
+        self.tray_icon.setToolTip(tray_tip)
 
     def on_file_completed(self, task_id, msg_id):
         if task_id in self.card_widgets:
@@ -628,8 +819,20 @@ class MainWindow(QMainWindow):
             # 2. Remove from worker tracking & files
             from core_downloader import load_active_tasks, save_active_tasks
             tasks = load_active_tasks()
-            tasks = [t for t in tasks if f"{t.get('channel_input')}_{t.get('media_id')}" != task_id]
-            save_active_tasks(tasks)
+            
+            # Reconstruct the logic to match the actual task data structure
+            new_tasks = []
+            for t in tasks:
+                tk_chan = str(t.get("channel_input")).replace("-100", "", 1)
+                tk_media = t.get("media_id")
+                tk_topic = t.get("topic_id")
+                # Construct the ID the same way we do in the worker for comparison
+                gen_id = f"{tk_chan}_{tk_topic}_{tk_media}" if tk_topic else f"{tk_chan}_{tk_media}"
+                # Handle the -100 prefix in task_id parameter too
+                clean_tid = str(task_id).replace("-100", "", 1)
+                if gen_id != clean_tid:
+                    new_tasks.append(t)
+            save_active_tasks(new_tasks)
             # 3. Final cleanup from UI
             card.deleteLater()
             del self.card_widgets[task_id]
@@ -654,6 +857,24 @@ class MainWindow(QMainWindow):
                 self.page_queue.active_layout.removeWidget(card)
                 self.page_queue.active_layout.insertWidget(idx + 1, card)
 
+    def reselect_task_media(self, task_id):
+        # 1. Extract channel name/ID from task_id (format: ID_mediaID)
+        try:
+            self._reselect_task_id = task_id # Set context for the upcoming browser
+            if task_id in self.card_widgets:
+                self.card_widgets[task_id].set_reselect_loading(True)
+                
+            from PySide6.QtWidgets import QApplication
+            QApplication.processEvents()
+            
+            channel_input, media_id_str = task_id.rsplit('_', 1)
+            # 2. Trigger a normal fetch for this channel
+            self.input_channel.setText(channel_input)
+            self.on_fetch_clicked()
+        except Exception as e:
+            self._reselect_task_id = None
+            print(f"Reselect error: {e}")
+
     def pause_all_downloads(self):
         for task_id, card in self.card_widgets.items():
             if not card.is_paused:
@@ -663,6 +884,11 @@ class MainWindow(QMainWindow):
         for task_id, card in self.card_widgets.items():
             if card.is_paused:
                 card.toggle_pause()
+
+    def re_fetch_from_history(self, channel_id):
+        self.input_channel.setText(str(channel_id))
+        self.switch_page("Home", 0)
+        self.on_fetch_clicked()
 
     def logout(self):
         reply = QMessageBox.question(self, "Logout", "Are you sure you want to log out? This will pause all downloads and clear your session.", QMessageBox.Yes | QMessageBox.No)

@@ -11,46 +11,66 @@ from telethon.tl.types import (
     InputMessagesFilterMusic,
     InputMessagesFilterUrl,
     InputMessagesFilterGif,
+    InputMessagesFilterVoice,
+    InputMessagesFilterRoundVideo,
     MessageMediaPhoto,
     MessageMediaDocument
 )
-from resource_utils import get_project_root
-STATE_FILE = os.path.join(get_project_root(), "download_state.json")
-TASKS_FILE = os.path.join(get_project_root(), "active_tasks.json")
+from database import save_task_db, load_active_tasks_db, remove_task_db, cache_media_list, mark_media_completed, get_completed_state_db
 
 def load_active_tasks():
-    if os.path.exists(TASKS_FILE):
-        try:
-            with open(TASKS_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Error loading tasks: {e}")
-            return []
-    return []
+    return load_active_tasks_db()
 
 def save_active_tasks(tasks):
-    try:
-        with open(TASKS_FILE, "w") as f:
-            json.dump(tasks, f)
-    except Exception as e:
-        print(f"Error saving tasks: {e}")
+    # For backward compatibility, keep the loop but save each to DB
+    for t in tasks:
+        save_task_db(t)
 
-def load_download_state():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r") as f:
-                return set(json.load(f))
-        except Exception as e:
-            print(f"Error loading state: {e}")
-            return set()
-    return set()
+def load_download_state(channel_id=None):
+    # We return a set of msg_ids for a specific channel to ensure ID isolation
+    res = get_completed_state_db()
+    if channel_id:
+        c_id = str(channel_id).replace("-100", "", 1)
+        return {msg_id for ch_id, msg_id in res if ch_id == c_id}
+    return {msg_id for ch_id, msg_id in res}
 
 def save_download_state(state):
-    try:
-        with open(STATE_FILE, "w") as f:
-            json.dump(list(state), f)
-    except Exception as e:
-        print(f"Error saving state: {e}")
+    # This is usually called file-by-file in the worker via complete_cb
+    # but if called globally, we can't easily map to channels here.
+    # We recommend using mark_media_completed instead.
+    pass
+
+def parse_channel_input(channel_input):
+    """
+    Parses channel input which might contain a topic ID in 'channelID_topicID' format
+    or a Telegram URL with a topic ID (e.g., t.me/c/123456789/1).
+    Returns (clean_channel_input, topic_id).
+    """
+    s = str(channel_input).strip()
+    
+    # 1. Handle URL format: https://t.me/c/123456789/1
+    if "t.me/c/" in s:
+        try:
+            # Extract the part after /c/
+            parts = s.split("t.me/c/")[-1].split("/")
+            if len(parts) >= 2:
+                chan_id = parts[0]
+                topic_id = parts[1]
+                if topic_id.isdigit():
+                    # Prefix with -100 if it's a numeric ID
+                    if chan_id.isdigit() and not chan_id.startswith("-"):
+                        chan_id = f"-100{chan_id}"
+                    return chan_id, int(topic_id)
+        except: pass
+
+    # 2. Handle ID_topicID format: -100123456789_123
+    if "_" in s:
+        parts = s.rsplit("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            # Basic validation that parts[0] looks like a channel ID or username
+            return parts[0], int(parts[1])
+            
+    return s, None
 
 async def fetch_channel(client, channel_input):
     """
@@ -79,6 +99,8 @@ async def fetch_channel(client, channel_input):
     try:
         # First attempt: direct get_entity
         channel = await client.get_entity(channel_input)
+        title = getattr(channel, 'title', getattr(channel, 'username', getattr(channel, 'first_name', 'Unknown')))
+        print(f"DEBUG: Successfully resolved channel/entity: '{title}' (ID: {channel.id})")
         return channel
     except Exception as e:
         # Second attempt: if direct lookup fails (common for private entities),
@@ -148,7 +170,7 @@ async def download_single_file(client, channel, message, folder_name, progress_c
                 expected_filepath = os.path.join(folder_name, file_name)
                 if os.path.exists(expected_filepath):
                     existing_size = os.path.getsize(expected_filepath)
-                    if file_size and existing_size == file_size:
+                    if file_size and existing_size >= file_size:
                         if progress_cb:
                             progress_cb(message.id, existing_size, existing_size, speed_str="Skipped (Exists)")
                         if complete_cb:
@@ -158,7 +180,7 @@ async def download_single_file(client, channel, message, folder_name, progress_c
             # Speed tracking variables
             start_time = [time.time()]
             last_bytes = [0]
-            cancelled_by_event = [False]
+            is_first_cb = [True]
             
             class PauseRequested(Exception): pass
             
@@ -166,6 +188,14 @@ async def download_single_file(client, channel, message, folder_name, progress_c
                 if cancel_event and cancel_event.is_set():
                     raise PauseRequested()
                 
+                if is_first_cb[0]:
+                    is_first_cb[0] = False
+                    last_bytes[0] = current
+                    start_time[0] = time.time()
+                    if progress_cb:
+                        progress_cb(message.id, current, total or file_size, speed_str="Resuming..." if current > 0 else "Starting...")
+                    return
+
                 now = time.time()
                 elapsed = now - start_time[0]
                 if elapsed >= 0.1:
@@ -188,52 +218,81 @@ async def download_single_file(client, channel, message, folder_name, progress_c
                         progress_cb(message.id, current, total or file_size, speed_str=speed_str)
 
             dir_path = os.path.join(folder_name, "")
+            target_path = expected_filepath if file_name else dir_path
+            
             file_path = None
             try:
                 file_path = await message.download_media(
-                    file=dir_path,
+                    file=target_path,
                     progress_callback=internal_progress,
                 )
             except PauseRequested:
                 if complete_cb: complete_cb(message.id, paused=True, filepath=None)
                 return
             except AttributeError as attr_err:
+                # Fallback for Telethon 1.38.x PhotoSize bug ('PhotoSize' object has no attribute 'location')
                 if "location" in str(attr_err) and getattr(message, 'photo', None):
-                    # Fallback for Telethon 1.38.x PhotoSize bug
-                    from telethon.tl.types import InputPhotoFileLocation
-                    photo = message.photo
-                    # Pick largest size that isn't empty
-                    best_size = None
-                    if photo.sizes:
-                        # Just grab the last one that has a type
-                        for sz in reversed(photo.sizes):
-                            if hasattr(sz, 'type'):
-                                best_size = sz
-                                break
-                    
-                    if best_size:
-                        loc = InputPhotoFileLocation(
-                            id=photo.id,
-                            access_hash=photo.access_hash,
-                            file_reference=photo.file_reference,
-                            thumb_size=best_size.type
+                    try:
+                        # Strategy 1: Download the photo object directly (higher level, often bypasses the bug)
+                        file_path = await client.download_media(
+                            message.photo,
+                            file=target_path,
+                            progress_callback=internal_progress
                         )
-                        fname = f"Photo_{message.id}.jpg"
-                        file_path = os.path.join(folder_name, fname)
-                        try:
-                            await client.download_file(
-                                loc,
-                                file=file_path,
-                                progress_callback=internal_progress,
+                    except Exception as e2:
+                        # Strategy 2: Manual construction of InputPhotoFileLocation (lowest level)
+                        from telethon.tl.types import InputPhotoFileLocation
+                        photo = message.photo
+                        best_size = None
+                        if photo.sizes:
+                            for sz in reversed(photo.sizes):
+                                if hasattr(sz, 'type'):
+                                    best_size = sz
+                                    break
+                        
+                        if best_size:
+                            loc = InputPhotoFileLocation(
+                                id=photo.id,
+                                access_hash=photo.access_hash,
+                                file_reference=photo.file_reference,
+                                thumb_size=best_size.type
                             )
-                        except PauseRequested:
-                            if complete_cb: complete_cb(message.id, paused=True, filepath=None)
-                            return
-                    else: raise
-                else: raise
+                            # If target_path is a directory, specify a filename
+                            final_target = target_path
+                            if os.path.isdir(final_target):
+                                final_target = os.path.join(final_target, f"Photo_{message.id}.jpg")
+                            
+                            try:
+                                file_path = await client.download_file(
+                                    loc,
+                                    file=final_target,
+                                    progress_callback=internal_progress,
+                                )
+                            except PauseRequested:
+                                if complete_cb: complete_cb(message.id, paused=True, filepath=None)
+                                return
+                            except Exception as e3:
+                                # If both fail, we re-raise the original error to allow retry logic to take over
+                                raise attr_err
+                        else:
+                            raise attr_err
+                else:
+                    raise attr_err
 
             if complete_cb:
                 complete_cb(message.id, filepath=file_path)
+                
+                # 📝 Message-Media Linker: Save sidecar .txt if message has text
+                if file_path and os.path.exists(file_path):
+                    msg_text = (message.message or "").strip()
+                    if msg_text:
+                        base_path = os.path.splitext(file_path)[0]
+                        txt_path = base_path + ".txt"
+                        try:
+                            with open(txt_path, "w", encoding="utf-8") as f:
+                                f.write(msg_text)
+                        except Exception as e:
+                            print(f"Error saving sidecar text: {e}")
             break
 
         except asyncio.CancelledError:
@@ -258,8 +317,13 @@ async def download_in_batches_headless(client, channel, messages, folder_name, b
     
     def internal_complete(msg_id, paused=False, filepath=None):
         if not paused:
+            # Persistent state in SQLite
+            from telethon.utils import get_peer_id
+            try:
+                ch_id = get_peer_id(channel)
+                mark_media_completed(ch_id, msg_id)
+            except: pass
             downloaded_state.add(msg_id)
-            save_download_state(downloaded_state)
         if complete_cb:
             complete_cb(msg_id, paused=paused, filepath=filepath)
 
@@ -274,7 +338,7 @@ async def download_in_batches_headless(client, channel, messages, folder_name, b
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
 
-async def get_messages_by_type(client, channel, media_choice, min_id=None, max_id=None, limit=2000):
+async def get_messages_by_type(client, channel, media_choice, min_id=None, max_id=None, limit=2000, topic_id=None):
     """
     media_choice: 
     1 - Images
@@ -298,6 +362,7 @@ async def get_messages_by_type(client, channel, media_choice, min_id=None, max_i
     if filter_type: kwargs["filter"] = filter_type
     if min_id: kwargs["min_id"] = min_id
     if max_id: kwargs["max_id"] = max_id
+    if topic_id: kwargs["reply_to"] = topic_id
 
     messages = await client.get_messages(channel, **kwargs)
     
@@ -311,27 +376,103 @@ async def get_messages_by_type(client, channel, media_choice, min_id=None, max_i
         
     return messages
 
-async def fetch_categorized_media(client, channel, limit=500):
+async def fetch_categorized_media(client, channel, limit=None, topic_id=None):
     """
     Fetches up to `limit` messages for each distinct media category IN PARALLEL.
-    All 6 filters run simultaneously via asyncio.gather, ~5x faster than sequential.
-    Returns a dict: {"Media": [...], "Files": [...], "Music": [...], "Links": [...], "GIFs": [...]}
+    Now uses a semaphore to prevent "Server closed the connection" errors and includes retries.
     """
-    (photos, videos, files, music, links, gifs) = await asyncio.gather(
-        client.get_messages(channel, filter=InputMessagesFilterPhotos(), limit=limit),
-        client.get_messages(channel, filter=InputMessagesFilterVideo(), limit=limit),
-        client.get_messages(channel, filter=InputMessagesFilterDocument(), limit=limit),
-        client.get_messages(channel, filter=InputMessagesFilterMusic(), limit=limit),
-        client.get_messages(channel, filter=InputMessagesFilterUrl(), limit=limit),
-        client.get_messages(channel, filter=InputMessagesFilterGif(), limit=limit),
-    )
+    if limit is None:
+        try:
+            limit = int(os.getenv('FETCH_LIMIT', 2000))
+        except:
+            limit = 2000
+            
+    if topic_id:
+        print(f"DEBUG: fetch_categorized_media using topic_id={topic_id}")
+    # 🛡️ Limit concurrency to 1 simultaneous request to prevent Telegram from forcefully dropping connections
+    sem = asyncio.Semaphore(1)
+    
+    async def get_messages_with_sem(filter_type=None, limit_val=limit):
+        async with sem:
+            for attempt in range(3):
+                try:
+                    kwargs = {}
+                    if filter_type: kwargs['filter'] = filter_type
+                    if topic_id is not None: kwargs['reply_to'] = topic_id
+                    return await client.get_messages(channel, limit=limit_val, **kwargs)
+                except Exception as e:
+                    if "closed the connection" in str(e).lower() and attempt < 2:
+                        await asyncio.sleep(1) # Wait a bit before retry
+                        continue
+                    raise e
+
+    try:
+        # Fetch fresh data from Telegram
+        (photos, videos, round_vids, docs, music, voice, links, gifs, all_msgs, topic_ref) = await asyncio.gather(
+            get_messages_with_sem(InputMessagesFilterPhotos()),
+            get_messages_with_sem(InputMessagesFilterVideo()),
+            get_messages_with_sem(InputMessagesFilterRoundVideo()),
+            get_messages_with_sem(InputMessagesFilterDocument()),
+            get_messages_with_sem(InputMessagesFilterMusic()),
+            get_messages_with_sem(InputMessagesFilterVoice()),
+            get_messages_with_sem(InputMessagesFilterUrl()),
+            get_messages_with_sem(InputMessagesFilterGif()),
+            get_messages_with_sem(limit_val=limit), # Base feed
+            get_messages_with_sem(limit_val=1) # Reference message for topic title if possible
+        )
+        
+        # If we have a topic_id, try to get the topic title from the first message
+        topic_title = None
+        if topic_id and all_msgs:
+            # In Telethon, forum topics are technically replies.
+            # We can try to fetch the service message that created the topic or just use one message.
+            pass
+
+        # 🗄️ CACHE RESULTS IN SQLite for faster tab switching
+        from telethon.utils import get_peer_id
+        try:
+            ch_id = get_peer_id(channel)
+            m_dict = {
+                "Media": sorted(list(photos) + list(videos) + list(round_vids), key=lambda m: m.id, reverse=True),
+                "Files": list(docs),
+                "ZIPs": [m for m in docs if m.document and m.document.mime_type in ["application/zip", "application/x-rar-compressed", "application/x-7z-compressed"]],
+                "Music": list(music),
+                "Voice": list(voice),
+                "Links": list(links),
+                "GIFs": list(gifs),
+                "Chat": [m for m in all_msgs if getattr(m, 'media', None) is None and (m.message or "").strip()]
+            }
+            cache_media_list(ch_id, m_dict)
+        except Exception as cache_err:
+            print(f"Failed to cache media: {cache_err}")
+            
+    except Exception as e:
+        print(f"Fetch Categorized Media global failure: {e}")
+        return {k.lower(): [] for k in ["Media", "Files", "ZIPs", "Music", "Voice", "Links", "GIFs", "Chat", "All"]}
+
+    # ZIPs/Archives secondary filter from documents
+    zips = [m for m in docs if m.document and m.document.mime_type in ["application/zip", "application/x-rar-compressed", "application/x-7z-compressed"]]
+    
+    # "Chat" = messages with NO media at all
+    chats = [m for m in all_msgs if getattr(m, 'media', None) is None and (m.message or "").strip()]
+
+    # Aggregate into "All" - Using a dict to deduplicate by message ID
+    all_dict = {}
+    all_raw = list(photos) + list(videos) + list(round_vids) + list(docs) + list(music) + list(voice) + list(links) + list(gifs) + list(chats)
+    for m in all_raw:
+        all_dict[m.id] = m
+    all_sorted = sorted(all_dict.values(), key=lambda x: x.id, reverse=True)
 
     return {
-        "Media": sorted(list(photos) + list(videos), key=lambda m: m.id, reverse=True)[:limit],
-        "Files": list(files),
+        "All":   all_sorted[:limit], # Limit the "All" tab to the most recent items
+        "Media": sorted(list(photos) + list(videos) + list(round_vids), key=lambda m: m.id, reverse=True)[:limit],
+        "Files": list(docs),
+        "ZIPs":  list(zips),
         "Music": list(music),
+        "Voice": list(voice),
         "Links": list(links),
         "GIFs":  list(gifs),
+        "Chat":  list(chats),
     }
 
 def get_folder_name(media_choice):

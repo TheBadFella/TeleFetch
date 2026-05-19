@@ -2,29 +2,22 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/vinodkr494/telegram-media-downloader?style=flat-square)](https://github.com/vinodkr494/telegram-media-downloader/releases/latest)
 [![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/vinodkr494/telegram-media-downloader/total?style=flat-square)](https://github.com/vinodkr494/telegram-media-downloader/releases)
-
 🚀 **Bulk-download videos, images, PDFs, audio & more** from any Telegram channel or group. Features a **Premium PySide6 Dashboard** with high-performance analytics, **Global Queue Tracking** (Total progress % & Session usage), **Advanced Task Management** (Prioritize & Cancel), category browser, real-time search, parallel downloads, smart deduplication, speed limiter, proxy support, and desktop notifications.
 
----## ✨ What's New in v2.5.0 (UI Polish & QoL Overhaul)
+### 🗄️ SQLite Persistence Engine
+Transitioned from legacy JSON files to a robust, indexed **SQLite database**. All tasks, message IDs, and download states are now stored with full data integrity.
 
-### 🎨 Professional UI Refresh
-Replaced legacy emoji-based navigation labels with **professional, high-quality icon assets**. Navigation is now cleaner, perfectly aligned, and uses HSL-tailored colors for better contrast in both Light and Dark modes.
+### 🚀 Instant Media Browser
+Experience zero-wait browsing. The application now **caches all media types** locally, allowing you to open the browser instantly with previously fetched data while the background worker refreshes the list from Telegram.
 
-### 📊 Global Queue Analytics
-The new **Right-Aligned Status Bar** now tracks your entire session in real-time:
-- **Total Progress %**: See the completion percentage of your entire download queue.
-- **Session Usage**: Track exactly how much data (MB/GB) you've downloaded in the current session.
-- **Unified Speed**: Real-time calculation of total throughput across all active tasks.
+### 📏 768p Display Optimization
+Refined UI dimensions and dialog heights (max 650px) to ensure a **perfect fit on standard laptop displays** and low-resolution monitors.
 
-### ⚡ Advanced Task Management
-Full control over your queue with dedicated buttons on every download card:
-- 🗑 **Cancel / Remove**: Stop a task and remove it from the queue with a single click.
-- ⬆ / ⬇ **Prioritize Tasks**: Reorder whole batches (cards) in the main queue to decide which entire group or channel downloads next.
-- 📂 **Quick Access**: Double-click any card to instantly open its download folder.
+### 🛡️ Channel-Isolated Progress
+Eliminated cross-channel ID collisions. Download completion and selection status are now tracked independently per channel, ensuring 100% accuracy in large queues.
 
-### 🔔 Desktop Notifications & Tray Actions
-- **Completion Alerts**: Receive a native Windows/macOS/Linux notification when a whole batch is finished.
-- **Tray Context Menu**: Right-click the system icon to **Pause All** or **Resume All** without opening the window.
+### 🎨 Theme-Aware Context Menus
+Context menus (Right-Click) now dynamically adopt the application's theme, providing a consistent premium experience in both Light and Dark modes.
 
 ---
 
@@ -59,7 +52,15 @@ Full control over your queue with dedicated buttons on every download card:
 </p>
 
 <p align="center">
-  <img src="screenshots/screenshot_v2.4.1/after_login_v2.4.1.png" width="800" alt="Home View">
+  <img src="screenshots/screenshot_v2.6.3/home_v2.6.3.png" width="800" alt="Home View">
+</p>
+
+<p align="center">
+  <img src="screenshots/screenshot_v2.6.3/download_queue_v2.6.3.png" width="800" alt="Download Queue">
+</p>
+
+<p align="center">
+  <img src="screenshots/screenshot_v2.6.3/settings_v2.6.3.png" width="800" alt="Settings View">
 </p>
 
 ---
@@ -130,21 +131,51 @@ Go to **Settings → Download Limit** to adjust how many files download simultan
 
 ## Changelog
 
+### v2.6.6
+- 🍎 **macOS DMG Fix**: Completely refactored the macOS build process to produce a working `.dmg` installer with a proper `.app` bundle.
+- 📦 **Improved CI/CD**: Updated GitHub Actions to automate DMG creation using `dmgbuild`.
+- 🛠️ **Build Optimization**: Simplified build scripts and unified artifact naming across Windows, Linux, and macOS.
+
+### v2.6.5
+- ⚙️ **Custom Scan Limit**: Added support for configuring the initial media fetching limit in Settings (previously hardcoded to 500).
+
+- 🎨 **Premium Sponsor Site**: Launched a dedicated, professional landing page to showcase project impact and support options.
+- 🧹 **Maintenance**: Internal refactoring to improve data persistence and scanning reliability.
+
+### v2.6.4
+- 🧵 **Forum Topic Support**: Full support for downloading from specific Telegram forum topics and sub-channels using the `channelID_topicID` format or direct topic URLs.
+- 🐞 **Parse Engine Fixes**: Enhanced task ID management and parsing logic to seamlessly pause and resume topic-scoped tasks.
+- 🛡️ **GetRepliesRequest Fix**: Refactored `client.get_messages` implementation to prevent API crashes when querying default message feeds.
+
+### v2.6.3
+- 🛠️ **Fixed Photo Download Bug**: Resolved the critical `AttributeError: 'PhotoSize' object has no attribute 'location'` that prevented image downloads in Telethon 1.38.1.
+- 🛡️ **Robust Fallback Engine**: Implemented a multi-strategy download system for photos to handle Telegram API layer regressions across different versions.
+
+### v2.6.2
+- 🛠️ **Refined Instant Loading:** Improved cached media UI mapping to show exact file sizes and dynamic emojis without visual lag.
+- 🛑 **Robust Background Fetching:** Fixed Telethon's internal "closed the connection" drops by pacing parallel chunk streams more smoothly.
+- ⚡ **Resilient Resuming:** Solved a critical file-resumption bug by accurately instructing the download engine via explicit pathing, preventing offset overrides and 0-byte restarts.
+- 🎨 **Responsive UX:** Instant loading indications are now immediately flushed to the UI queue for zero perceived wait time during database queries.
+
+### v2.6.0
+- 🗄️ **SQLite Persistence Engine** — transitioned from legacy JSON files to a robust, indexed SQLite database for all tasks and download history.
+- 🚀 **Instant Media Browser** — introduced high-performance content caching. Browse previously fetched media instantly while the app refreshes in the background.
+- 📏 **768p Display Optimization** — refined window heights and dialog constraints to ensure a perfect fit on standard laptop and low-resolution displays.
+- 🛡️ **Channel-Isolated Progress** — eliminated cross-channel ID collisions. Download progress and completion status are now tracked independently per channel.
+- 🎨 **Theme-Aware Menus** — context menus now dynamically adopt Light/Dark mode styling for a cohesive premium experience.
+
 ### v2.5.0
 - 🎨 **UI Overhaul** — replaced legacy emoji-based navigation with professional, high-quality icon assets and refined QSS typography.
 - 📊 **Global Analytics** — introduced real-time session data, total completion %, and consolidated status bar metrics.
 - ⚡ **Queue Mastery** — added Cancel (Remove) and Prioritize (Up/Down) functionality to the download cards.
 - 🔔 **Native Feedback** — implemented desktop notifications for task completion and an enhanced tray context menu.
-- 🖱 **Ddouble-Click Gestures** — double-click task cards to jump directly to the download folder.
+- 🖱 **Double-Click Gestures** — double-click task cards to jump directly to the download folder.
 - 🔍 **Search Focus** — auto-focuses the search bar upon opening the Media Browser for faster filtering.
 
 ### v2.4.7
 - 💾 **Robust Persistence** — centralized all persistent files (`.env`, `config.json`, `download_state.json`, `active_tasks.json`, and `.session`) fixing persistence issues in standalone builds.
 - 🌓 **Improved .env Logic** — added automatic quote stripping for `API_ID` and `API_HASH` and persisted `PHONE` for a seamless login experience.
 - 🛡️ **Path Resolver Sync** — ensured all UI components and background workers use the centralized `get_project_root` helper.
-MainWindow, SettingsView, LoginView) and background workers to use the new centralized `get_project_root` helper.
-
-### v2.4.6
 
 ### v2.4.5
 - ⏯️ **Pause Reliability** — implemented active task tracking to prevent duplicate background threads; clicking "Pause" now reliably stops all activity for that task immediately
@@ -210,7 +241,9 @@ MainWindow, SettingsView, LoginView) and background workers to use the new centr
 
 ## Roadmap
 
-Future improvements are tracked as [GitHub Issues](https://github.com/vinodkr494/telegram-media-downloader/issues). Have an idea? Open a feature request!
+We are currently focused entirely on stabilizing and improving the robustness of existing features.
+
+If you have an idea or suggestion for a new feature, please join our [GitHub Discussions (Ideas)](https://github.com/vinodkr494/telegram-media-downloader/discussions/categories/ideas) instead of opening an issue. Issues are now strictly reserved for bug reports.
 
 ## ⚠️ Legal Disclaimer
 
@@ -255,4 +288,17 @@ Our mission is to bridge the gap between complex terminal-based downloaders and 
 
 ---
 
+## ☕ Support & Donation
+
+If you find this tool helpful and want to support its continued development, please consider:
+
+- **⭐ Star this repository** to help others find it.
+- **💖 Sponsor on GitHub**: [Sponsor @vinodkr494](https://github.com/sponsors/vinodkr494)
+
+Your support helps cover the costs of testing, maintenance, and new features!
+
+---
+
 Made with ❤️ by [Vinod Kumar](https://github.com/vinodkr494).
+
+[![Star History Chart](https://api.star-history.com/svg?repos=vinodkr494/telegram-media-downloader&type=Date)](https://star-history.com/#vinodkr494/telegram-media-downloader&Date)
