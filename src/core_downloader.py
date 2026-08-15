@@ -310,25 +310,19 @@ async def download_single_file(client, channel, message, folder_name, progress_c
             # 🚀 Strategy 0: High-Speed FastTelethon Parallel Chunk Downloader for files > 1MB
             if file_size and file_size > 1024 * 1024 and expected_filepath:
                 try:
-                    from telethon.utils import get_input_location
-                    doc = getattr(message, 'document', None)
-                    video = getattr(message, 'video', None)
-                    photo = getattr(message, 'photo', None)
-                    target_obj = doc or video or photo
+                    target_obj = getattr(message, 'media', None) or getattr(message, 'document', None) or getattr(message, 'video', None) or message
                     if target_obj:
-                        location = get_input_location(target_obj)
-                        if location:
-                            success = await fast_download_file(
-                                client=client,
-                                location=location,
-                                target_path=expected_filepath,
-                                file_size=file_size,
-                                progress_callback=internal_progress,
-                                cancel_event=cancel_event,
-                                workers=4
-                            )
-                            if success and os.path.exists(expected_filepath):
-                                file_path = expected_filepath
+                        success = await fast_download_file(
+                            client=client,
+                            location=target_obj,
+                            target_path=expected_filepath,
+                            file_size=file_size,
+                            progress_callback=internal_progress,
+                            cancel_event=cancel_event,
+                            workers=4
+                        )
+                        if success and os.path.exists(expected_filepath):
+                            file_path = expected_filepath
                 except PauseRequested:
                     if complete_cb: complete_cb(message.id, paused=True, filepath=None)
                     return

@@ -21,13 +21,20 @@ def init_db():
         size INTEGER,
         date TEXT,
         completed INTEGER DEFAULT 0,
-        raw_json TEXT, 
+        raw_json TEXT,
+        downloaded_path TEXT,
+        channel_title TEXT,
         PRIMARY KEY (msg_id, channel_id)
     )
     """)
     
     try:
         cursor.execute("ALTER TABLE media_cache ADD COLUMN downloaded_path TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE media_cache ADD COLUMN channel_title TEXT")
     except sqlite3.OperationalError:
         pass
     
@@ -50,6 +57,9 @@ def init_db():
     
     conn.commit()
     conn.close()
+
+# Auto-initialize DB on import
+init_db()
 
 # --- TASK MANAGEMENT ---
 
@@ -253,24 +263,30 @@ def get_all_completed_media(channel_id=None, category=None, search=None):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
-    query = "SELECT * FROM media_cache WHERE completed=1"
+    query = """
+    SELECT m.*, 
+           COALESCE(m.channel_title, t.title, m.channel_id) as resolved_channel_title 
+    FROM media_cache m
+    LEFT JOIN tasks t ON t.channel_input LIKE '%' || m.channel_id || '%'
+    WHERE m.completed=1
+    """
     params = []
     
-    if channel_id:
+    if channel_id and channel_id != "all":
         c_id = str(channel_id).replace("-100", "", 1)
-        query += " AND channel_id=?"
+        query += " AND m.channel_id=?"
         params.append(c_id)
         
     if category and category != "all":
-        query += " AND media_type=?"
+        query += " AND m.media_type=?"
         params.append(category)
         
     if search:
-        query += " AND (title LIKE ? OR downloaded_path LIKE ? OR CAST(msg_id AS TEXT) LIKE ?)"
+        query += " AND (m.title LIKE ? OR m.downloaded_path LIKE ? OR CAST(m.msg_id AS TEXT) LIKE ? OR m.channel_title LIKE ?)"
         term = f"%{search}%"
-        params.extend([term, term, term])
+        params.extend([term, term, term, term])
         
-    query += " ORDER BY date DESC, msg_id DESC"
+    query += " GROUP BY m.msg_id, m.channel_id ORDER BY m.date DESC, m.msg_id DESC"
     cursor.execute(query, params)
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
@@ -298,17 +314,21 @@ def delete_multiple_media_cache_items(items):
     conn.close()
 
 def get_cached_channels_summary():
-    """Returns a list of distinct channel IDs with item counts from media cache."""
+    """Returns a list of distinct channel summaries with titles and item counts from media cache."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-    SELECT channel_id, COUNT(*) as count, SUM(size) as total_size 
-    FROM media_cache 
-    WHERE completed=1 
-    GROUP BY channel_id
+    SELECT m.channel_id, 
+           COALESCE(MAX(m.channel_title), MAX(t.title), m.channel_id) as channel_title,
+           COUNT(*) as count, 
+           SUM(m.size) as total_size 
+    FROM media_cache m
+    LEFT JOIN tasks t ON t.channel_input LIKE '%' || m.channel_id || '%'
+    WHERE m.completed=1 
+    GROUP BY m.channel_id
     ORDER BY count DESC
     """)
-    rows = cursor.fetchall()
+    rows = [dict(channel_id=r[0], channel_title=r[1], count=r[2], total_size=r[3]) for r in cursor.fetchall()]
     conn.close()
     return rows
 

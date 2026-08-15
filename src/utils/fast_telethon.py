@@ -27,7 +27,7 @@ async def _download_part(client, location, offset, limit, dc_id=None):
             else:
                 raise e
 
-async def fast_download_file(client, location, target_path, file_size, progress_callback=None, cancel_event=None, workers=4):
+async def fast_download_file(client, location, target_path, file_size, dc_id=None, progress_callback=None, cancel_event=None, workers=4):
     """
     Downloads media at maximum throughput using parallel chunk streams.
     Falls back gracefully if parallel streaming is not supported for the media.
@@ -40,10 +40,18 @@ async def fast_download_file(client, location, target_path, file_size, progress_
         # Small file: single chunk is fast enough directly
         return False
 
-    # Determine DC ID if possible
-    dc_id = getattr(location, 'dc_id', None)
-    if not dc_id and hasattr(location, 'document'):
-        dc_id = getattr(location.document, 'dc_id', None)
+    # Extract dc_id and InputFileLocation TLObject
+    if isinstance(location, tuple) and len(location) == 2:
+        dc_id, location = location
+    elif not hasattr(location, 'SUBCLASS_OF_ID') or location.SUBCLASS_OF_ID != 0x1523d462:
+        try:
+            from telethon.utils import get_input_location
+            dc_id, location = get_input_location(location)
+        except Exception:
+            return False
+
+    if not location or not hasattr(location, 'SUBCLASS_OF_ID'):
+        return False
 
     # Pre-allocate output file
     temp_path = target_path + ".part"

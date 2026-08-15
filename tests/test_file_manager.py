@@ -75,6 +75,14 @@ class TestFileManager(unittest.TestCase):
         self.assertNotIn(3002, rem_ids)
         self.assertIn(3003, rem_ids)
 
+    def test_channel_summary_and_filtering(self):
+        msg_id = 4001
+        mark_media_completed(self.test_chan, msg_id)
+        
+        summaries = get_cached_channels_summary()
+        chan_ids = [str(s.get("channel_id")) for s in summaries]
+        self.assertIn(self.test_chan, chan_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

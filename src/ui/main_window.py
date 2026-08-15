@@ -201,7 +201,7 @@ class MainWindow(QMainWindow):
         # 2. Nav Buttons (Now using original icons from assets)
         self.btn_home = self._create_nav_button("Home", "home.png", True)
         self.btn_queue = self._create_nav_button("Queue", "download.png")
-        self.btn_files = self._create_nav_button("Files", "download.png")
+        self.btn_files = self._create_nav_button("Files", "files.png")
         self.btn_settings = self._create_nav_button("Settings", "setting.png")
         self.btn_about = self._create_nav_button("About", "info.png")
 

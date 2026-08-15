@@ -32,6 +32,7 @@ class FileManagerView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.all_items = []
+        self.channel_summaries = []
         self.setup_ui()
         self.refresh_list()
 
@@ -80,7 +81,13 @@ class FileManagerView(QWidget):
         self.input_search = QLineEdit()
         self.input_search.setPlaceholderText("🔍 Search by filename or ID...")
         self.input_search.textChanged.connect(self.apply_filter)
-        f_layout.addWidget(self.input_search, stretch=2)
+        f_layout.addWidget(self.input_search, stretch=3)
+
+        # Channel Selector Dropdown
+        self.combo_channel = QComboBox()
+        self.combo_channel.addItem("📺 All Channels", "all")
+        self.combo_channel.currentIndexChanged.connect(self.apply_filter)
+        f_layout.addWidget(self.combo_channel, stretch=2)
 
         # Category Filter
         self.combo_category = QComboBox()
@@ -88,7 +95,7 @@ class FileManagerView(QWidget):
             "All Categories", "Images", "Videos", "Documents / PDFs", "ZIPs", "Audio"
         ])
         self.combo_category.currentIndexChanged.connect(self.apply_filter)
-        f_layout.addWidget(self.combo_category, stretch=1)
+        f_layout.addWidget(self.combo_category, stretch=2)
 
         # Status Filter
         self.combo_status = QComboBox()
@@ -96,32 +103,34 @@ class FileManagerView(QWidget):
             "All Status", "🟢 Present on Disk", "🟡 Missing / Deleted"
         ])
         self.combo_status.currentIndexChanged.connect(self.apply_filter)
-        f_layout.addWidget(self.combo_status, stretch=1)
+        f_layout.addWidget(self.combo_status, stretch=2)
 
         main_layout.addWidget(filter_frame)
 
         # ── 3. Table View ────────────────────────────────────────────────────
         self.table = QTableWidget()
         self.table.setObjectName("FileTable")
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
-            " ", "Type", "File Name", "Size", "Date", "Status", "Actions"
+            " ", "Type", "File Name", "Channel", "Size", "Date", "Status", "Actions"
         ])
         
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Fixed) # Checkbox
         self.table.setColumnWidth(0, 36)
         header.setSectionResizeMode(1, QHeaderView.Fixed) # Type
-        self.table.setColumnWidth(1, 55)
-        header.setSectionResizeMode(2, QHeaderView.Stretch) # Name
-        header.setSectionResizeMode(3, QHeaderView.Fixed) # Size
-        self.table.setColumnWidth(3, 90)
-        header.setSectionResizeMode(4, QHeaderView.Fixed) # Date
-        self.table.setColumnWidth(4, 110)
-        header.setSectionResizeMode(5, QHeaderView.Fixed) # Status
-        self.table.setColumnWidth(5, 120)
-        header.setSectionResizeMode(6, QHeaderView.Fixed) # Actions
-        self.table.setColumnWidth(6, 170)
+        self.table.setColumnWidth(1, 50)
+        header.setSectionResizeMode(2, QHeaderView.Stretch) # File Name
+        header.setSectionResizeMode(3, QHeaderView.Fixed) # Channel
+        self.table.setColumnWidth(3, 160)
+        header.setSectionResizeMode(4, QHeaderView.Fixed) # Size
+        self.table.setColumnWidth(4, 85)
+        header.setSectionResizeMode(5, QHeaderView.Fixed) # Date
+        self.table.setColumnWidth(5, 100)
+        header.setSectionResizeMode(6, QHeaderView.Fixed) # Status
+        self.table.setColumnWidth(6, 110)
+        header.setSectionResizeMode(7, QHeaderView.Fixed) # Actions
+        self.table.setColumnWidth(7, 160)
 
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -161,12 +170,36 @@ class FileManagerView(QWidget):
         main_layout.addLayout(bottom_bar)
 
     def refresh_list(self):
-        """Loads all completed media from SQLite and re-renders table."""
+        """Loads all completed media from SQLite, updates channel filters, and re-renders table."""
         self.all_items = get_all_completed_media()
+        self.update_channel_dropdown()
         self.apply_filter()
+
+    def update_channel_dropdown(self):
+        """Populates the channel filter dropdown with available channels."""
+        current_data = self.combo_channel.currentData()
+        self.combo_channel.blockSignals(True)
+        self.combo_channel.clear()
+        self.combo_channel.addItem("📺 All Channels", "all")
+
+        summaries = get_cached_channels_summary()
+        for s in summaries:
+            c_id = s.get("channel_id")
+            c_title = s.get("channel_title") or c_id
+            c_count = s.get("count", 0)
+            label = f"📢 {c_title} ({c_count})"
+            self.combo_channel.addItem(label, str(c_id))
+
+        # Restore previous selection if possible
+        if current_data:
+            idx = self.combo_channel.findData(current_data)
+            if idx >= 0:
+                self.combo_channel.setCurrentIndex(idx)
+        self.combo_channel.blockSignals(False)
 
     def apply_filter(self):
         search_text = self.input_search.text().strip().lower()
+        selected_chan = self.combo_channel.currentData()
         cat_idx = self.combo_category.currentIndex()
         status_idx = self.combo_status.currentIndex()
 
@@ -185,34 +218,41 @@ class FileManagerView(QWidget):
         for item in self.all_items:
             fpath = item.get("downloaded_path") or ""
             fname = item.get("title") or os.path.basename(fpath) or f"Message_{item.get('msg_id')}"
+            chan_name = item.get("resolved_channel_title") or item.get("channel_title") or str(item.get("channel_id", ""))
             on_disk = bool(fpath and os.path.exists(fpath) and os.path.getsize(fpath) > 0)
             
-            # 1. Search text filter
+            # 1. Channel Filter
+            if selected_chan and selected_chan != "all":
+                if str(item.get("channel_id")) != str(selected_chan):
+                    continue
+
+            # 2. Search text filter
             if search_text:
                 match_name = search_text in fname.lower()
                 match_id = search_text in str(item.get("msg_id", ""))
                 match_path = search_text in fpath.lower()
-                if not (match_name or match_id or match_path):
+                match_chan = search_text in chan_name.lower()
+                if not (match_name or match_id or match_path or match_chan):
                     continue
 
-            # 2. Category filter
+            # 3. Category filter
             if cat_idx > 0:
                 expected_cats = cat_map.get(cat_idx, [])
                 item_cat = str(item.get("media_type", "")).lower()
                 if item_cat not in expected_cats:
                     continue
 
-            # 3. Status filter
+            # 4. Status filter
             if status_idx == 1 and not on_disk: # Present on disk
                 continue
             elif status_idx == 2 and on_disk: # Missing
                 continue
 
-            filtered.append((item, fname, fpath, on_disk))
+            filtered.append((item, fname, chan_name, fpath, on_disk))
             if on_disk:
                 total_disk_size += item.get("size") or (os.path.getsize(fpath) if os.path.exists(fpath) else 0)
 
-        self.lbl_stats.setText(f"{len(filtered)} items shown ({format_bytes(total_disk_size)} on disk)")
+        self.lbl_stats.setText(f"{len(filtered)} items ({format_bytes(total_disk_size)} on disk)")
         self.render_table(filtered)
 
     def render_table(self, filtered_items):
@@ -227,7 +267,7 @@ class FileManagerView(QWidget):
             "audio": "🎵", "music": "🎵", "voice": "🎙️"
         }
 
-        for row, (item, fname, fpath, on_disk) in enumerate(filtered_items):
+        for row, (item, fname, chan_name, fpath, on_disk) in enumerate(filtered_items):
             # 0. Checkbox
             chk = QCheckBox()
             chk.setProperty("row_item", item)
@@ -246,25 +286,30 @@ class FileManagerView(QWidget):
             item_type.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 1, item_type)
 
-            # 2. File Name & Subtext
+            # 2. File Name
             item_name = QTableWidgetItem(fname)
             item_name.setToolTip(fpath or fname)
             item_name.setData(Qt.UserRole, (item, fpath, on_disk))
             self.table.setItem(row, 2, item_name)
 
-            # 3. Size
+            # 3. Channel Name
+            item_chan = QTableWidgetItem(chan_name)
+            item_chan.setToolTip(f"Channel: {chan_name} (ID: {item.get('channel_id')})")
+            self.table.setItem(row, 3, item_chan)
+
+            # 4. Size
             size_bytes = item.get("size") or (os.path.getsize(fpath) if on_disk else 0)
             item_size = QTableWidgetItem(format_bytes(size_bytes))
             item_size.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.table.setItem(row, 3, item_size)
+            self.table.setItem(row, 4, item_size)
 
-            # 4. Date
+            # 5. Date
             date_str = str(item.get("date") or "")[:10]
             item_date = QTableWidgetItem(date_str)
             item_date.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(row, 4, item_date)
+            self.table.setItem(row, 5, item_date)
 
-            # 5. Status Badge
+            # 6. Status Badge
             status_text = "🟢 On Disk" if on_disk else "🟡 Missing"
             item_status = QTableWidgetItem(status_text)
             item_status.setTextAlignment(Qt.AlignCenter)
@@ -272,9 +317,9 @@ class FileManagerView(QWidget):
                 item_status.setForeground(QColor("#F59E0B"))
             else:
                 item_status.setForeground(QColor("#10B981"))
-            self.table.setItem(row, 5, item_status)
+            self.table.setItem(row, 6, item_status)
 
-            # 6. Action Buttons
+            # 7. Action Buttons
             action_widget = QWidget()
             act_layout = QHBoxLayout(action_widget)
             act_layout.setContentsMargins(4, 2, 4, 2)
@@ -300,7 +345,7 @@ class FileManagerView(QWidget):
             btn_del.clicked.connect(lambda checked=False, it=item, p=fpath, od=on_disk: self.prompt_delete_item(it, p, od))
             act_layout.addWidget(btn_del)
 
-            self.table.setCellWidget(row, 6, action_widget)
+            self.table.setCellWidget(row, 7, action_widget)
 
         self.update_selected_count()
 

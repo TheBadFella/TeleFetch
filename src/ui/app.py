@@ -81,7 +81,9 @@ def launch_app(telegram_worker, version="unknown"):
     global _app_instance
     _app_instance = QApplication(sys.argv)
 
-    from PySide6.QtGui import QIcon
+    from PySide6.QtGui import QIcon, QFont
+    _app_instance.setFont(QFont("Segoe UI", 9))
+
     icon_path = get_resource_path(os.path.join("assets", "logo.ico"))
     if os.path.exists(icon_path):
         _app_instance.setWindowIcon(QIcon(icon_path))
