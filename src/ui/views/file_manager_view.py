@@ -11,7 +11,7 @@ from PySide6.QtGui import QDesktopServices, QIcon, QColor
 from database import (
     get_all_completed_media, delete_media_cache_item, 
     delete_multiple_media_cache_items, get_cached_channels_summary,
-    unmark_media_completed
+    unmark_media_completed, update_media_downloaded_path
 )
 from ui.views.settings_view import load_config
 
@@ -24,6 +24,39 @@ def format_bytes(size_bytes):
             return f"{size_bytes:.1f} {unit}" if unit != "B" else f"{int(size_bytes)} B"
         size_bytes /= 1024
     return f"{size_bytes:.1f} PB"
+
+
+def resolve_item_disk_path(item):
+    """
+    Finds the actual disk file path for a media item.
+    If downloaded_path is empty, searches configured downloads folder.
+    """
+    fpath = item.get("downloaded_path")
+    if fpath and os.path.exists(fpath) and os.path.getsize(fpath) > 0:
+        return fpath, True
+
+    cfg = load_config()
+    base_down = cfg.get("download_path", "downloads")
+    fname = item.get("title") or ""
+    c_title = item.get("resolved_channel_title") or item.get("channel_title") or ""
+
+    if fname:
+        # 1. Direct inside base_down
+        cand1 = os.path.join(base_down, fname)
+        if os.path.exists(cand1) and os.path.getsize(cand1) > 0:
+            update_media_downloaded_path(item.get("channel_id"), item.get("msg_id"), cand1)
+            return cand1, True
+
+        # 2. Check channel subfolders
+        if c_title:
+            safe_c = "".join([c if c.isalnum() or c in (' ', '-', '_') else '_' for c in c_title])
+            for cat in ["", "videos", "images", "pdfs", "zips", "audio", "all_media"]:
+                cand2 = os.path.join(base_down, safe_c, cat, fname)
+                if os.path.exists(cand2) and os.path.getsize(cand2) > 0:
+                    update_media_downloaded_path(item.get("channel_id"), item.get("msg_id"), cand2)
+                    return cand2, True
+
+    return fpath, bool(fpath and os.path.exists(fpath) and os.path.getsize(fpath) > 0)
 
 
 class FileManagerView(QWidget):
@@ -79,7 +112,7 @@ class FileManagerView(QWidget):
 
         # Search Bar
         self.input_search = QLineEdit()
-        self.input_search.setPlaceholderText("🔍 Search by filename or ID...")
+        self.input_search.setPlaceholderText("🔍 Search by filename, ID, or channel...")
         self.input_search.textChanged.connect(self.apply_filter)
         f_layout.addWidget(self.input_search, stretch=3)
 
@@ -119,20 +152,21 @@ class FileManagerView(QWidget):
         header.setSectionResizeMode(0, QHeaderView.Fixed) # Checkbox
         self.table.setColumnWidth(0, 36)
         header.setSectionResizeMode(1, QHeaderView.Fixed) # Type
-        self.table.setColumnWidth(1, 50)
+        self.table.setColumnWidth(1, 46)
         header.setSectionResizeMode(2, QHeaderView.Stretch) # File Name
         header.setSectionResizeMode(3, QHeaderView.Fixed) # Channel
-        self.table.setColumnWidth(3, 160)
+        self.table.setColumnWidth(3, 150)
         header.setSectionResizeMode(4, QHeaderView.Fixed) # Size
         self.table.setColumnWidth(4, 85)
         header.setSectionResizeMode(5, QHeaderView.Fixed) # Date
-        self.table.setColumnWidth(5, 100)
+        self.table.setColumnWidth(5, 95)
         header.setSectionResizeMode(6, QHeaderView.Fixed) # Status
-        self.table.setColumnWidth(6, 110)
+        self.table.setColumnWidth(6, 95)
         header.setSectionResizeMode(7, QHeaderView.Fixed) # Actions
-        self.table.setColumnWidth(7, 160)
+        self.table.setColumnWidth(7, 210)
 
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(40)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -203,7 +237,6 @@ class FileManagerView(QWidget):
         cat_idx = self.combo_category.currentIndex()
         status_idx = self.combo_status.currentIndex()
 
-        # Category mapping: 1=photo, 2=video, 3=pdf/document, 4=zip, 5=audio
         cat_map = {
             1: ["photo", "image", "images"],
             2: ["video", "videos"],
@@ -216,10 +249,9 @@ class FileManagerView(QWidget):
         total_disk_size = 0
 
         for item in self.all_items:
-            fpath = item.get("downloaded_path") or ""
-            fname = item.get("title") or os.path.basename(fpath) or f"Message_{item.get('msg_id')}"
+            fpath, on_disk = resolve_item_disk_path(item)
+            fname = item.get("title") or (os.path.basename(fpath) if fpath else f"Message_{item.get('msg_id')}")
             chan_name = item.get("resolved_channel_title") or item.get("channel_title") or str(item.get("channel_id", ""))
-            on_disk = bool(fpath and os.path.exists(fpath) and os.path.getsize(fpath) > 0)
             
             # 1. Channel Filter
             if selected_chan and selected_chan != "all":
@@ -230,7 +262,7 @@ class FileManagerView(QWidget):
             if search_text:
                 match_name = search_text in fname.lower()
                 match_id = search_text in str(item.get("msg_id", ""))
-                match_path = search_text in fpath.lower()
+                match_path = search_text in (fpath.lower() if fpath else "")
                 match_chan = search_text in chan_name.lower()
                 if not (match_name or match_id or match_path or match_chan):
                     continue
@@ -250,7 +282,7 @@ class FileManagerView(QWidget):
 
             filtered.append((item, fname, chan_name, fpath, on_disk))
             if on_disk:
-                total_disk_size += item.get("size") or (os.path.getsize(fpath) if os.path.exists(fpath) else 0)
+                total_disk_size += item.get("size") or (os.path.getsize(fpath) if (fpath and os.path.exists(fpath)) else 0)
 
         self.lbl_stats.setText(f"{len(filtered)} items ({format_bytes(total_disk_size)} on disk)")
         self.render_table(filtered)
@@ -298,7 +330,7 @@ class FileManagerView(QWidget):
             self.table.setItem(row, 3, item_chan)
 
             # 4. Size
-            size_bytes = item.get("size") or (os.path.getsize(fpath) if on_disk else 0)
+            size_bytes = item.get("size") or (os.path.getsize(fpath) if (on_disk and fpath and os.path.exists(fpath)) else 0)
             item_size = QTableWidgetItem(format_bytes(size_bytes))
             item_size.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.table.setItem(row, 4, item_size)
@@ -319,29 +351,38 @@ class FileManagerView(QWidget):
                 item_status.setForeground(QColor("#10B981"))
             self.table.setItem(row, 6, item_status)
 
-            # 7. Action Buttons
+            # 7. Action Buttons (Always visible & styled)
             action_widget = QWidget()
             act_layout = QHBoxLayout(action_widget)
-            act_layout.setContentsMargins(4, 2, 4, 2)
-            act_layout.setSpacing(6)
+            act_layout.setContentsMargins(2, 2, 2, 2)
+            act_layout.setSpacing(4)
 
             if on_disk:
                 btn_open = QPushButton("📂 Open")
                 btn_open.setObjectName("CardButtonCompact")
                 btn_open.setCursor(Qt.PointingHandCursor)
+                btn_open.setToolTip("Open this file")
                 btn_open.clicked.connect(lambda checked=False, p=fpath: self.open_file(p))
                 act_layout.addWidget(btn_open)
 
                 btn_folder = QPushButton("📁 Folder")
                 btn_folder.setObjectName("CardButtonCompact")
                 btn_folder.setCursor(Qt.PointingHandCursor)
+                btn_folder.setToolTip("Show file in folder")
                 btn_folder.clicked.connect(lambda checked=False, p=fpath: self.show_in_folder(p))
                 act_layout.addWidget(btn_folder)
+            else:
+                btn_re = QPushButton("🔄 Re-fetch")
+                btn_re.setObjectName("CardButtonCompact")
+                btn_re.setCursor(Qt.PointingHandCursor)
+                btn_re.setToolTip("Mark for re-download")
+                btn_re.clicked.connect(lambda checked=False, it=item: self.redownload_item(it))
+                act_layout.addWidget(btn_re)
 
             btn_del = QPushButton("🗑")
             btn_del.setObjectName("CardButtonCompact")
             btn_del.setCursor(Qt.PointingHandCursor)
-            btn_del.setToolTip("Delete this item")
+            btn_del.setToolTip("Delete / Remove item")
             btn_del.clicked.connect(lambda checked=False, it=item, p=fpath, od=on_disk: self.prompt_delete_item(it, p, od))
             act_layout.addWidget(btn_del)
 
@@ -390,7 +431,6 @@ class FileManagerView(QWidget):
     def show_in_folder(self, fpath):
         if fpath and os.path.exists(fpath):
             if os.name == 'nt':
-                # Windows Explorer select
                 subprocess.Popen(f'explorer /select,"{os.path.abspath(fpath)}"')
             else:
                 folder = os.path.dirname(fpath)
@@ -415,6 +455,16 @@ class FileManagerView(QWidget):
                 item, fpath, on_disk = data
                 if on_disk:
                     self.open_file(fpath)
+
+    def redownload_item(self, item):
+        c_id = item.get("channel_id")
+        msg_id = item.get("msg_id")
+        unmark_media_completed(c_id, msg_id)
+        QMessageBox.information(
+            self, "Marked for Re-download", 
+            f"Message #{msg_id} was unmarked as completed.\nStart a download for this channel on the Home tab to re-download it!"
+        )
+        self.refresh_list()
 
     def prompt_delete_item(self, item, fpath, on_disk):
         c_id = item.get("channel_id")
@@ -501,6 +551,8 @@ class FileManagerView(QWidget):
             action_open = None
             action_folder = None
             action_copy_path = None
+            action_redownload = menu.addAction("🔄 Mark for Re-download")
+            menu.addSeparator()
 
         action_copy_name = menu.addAction("📋 Copy File Name")
         menu.addSeparator()
@@ -521,10 +573,12 @@ class FileManagerView(QWidget):
         elif action == action_copy_path and fpath:
             QApplication.clipboard().setText(os.path.abspath(fpath))
         elif action == action_copy_name:
-            fname = item_dict.get("title") or os.path.basename(fpath)
+            fname = item_dict.get("title") or (os.path.basename(fpath) if fpath else "")
             QApplication.clipboard().setText(fname)
         elif action == action_remove_db:
             delete_media_cache_item(item_dict.get("channel_id"), item_dict.get("msg_id"))
             self.refresh_list()
         elif action == action_delete_disk and on_disk:
             self.prompt_delete_item(item_dict, fpath, on_disk)
+        elif not on_disk and action == action_redownload:
+            self.redownload_item(item_dict)

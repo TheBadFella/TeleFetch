@@ -80,11 +80,15 @@ async def fast_download_file(client, location, target_path, file_size, dc_id=Non
                 break
 
             offset = part_idx * CHUNK_SIZE
-            limit = min(CHUNK_SIZE, file_size - offset)
+            limit = CHUNK_SIZE # Telegram requires limit to be a multiple of 4KB and power of 2
 
             chunk = await _download_part(client, location, offset, limit, dc_id=dc_id)
             if not chunk:
                 continue
+
+            # If last chunk returned extra padding past file_size, trim it
+            if offset + len(chunk) > file_size:
+                chunk = chunk[:file_size - offset]
 
             async with lock:
                 file_handle.seek(offset)

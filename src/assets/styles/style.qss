@@ -204,10 +204,14 @@ QPushButton#CardButtonCompact {
     background-color: #F1F5F9;
     border: 1px solid #CBD5E1;
     border-radius: 5px;
-    color: #334155;
-    font-size: 12px;
-    padding: 2px;
-    min-height: 28px;
+    color: #1E293B;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    min-height: 24px;
+}
+QPushButton#CardButtonCompact:hover {
+    background-color: #E2E8F0;
 }
 
 QPushButton#ExpandButton {
