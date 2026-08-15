@@ -42,10 +42,13 @@ This document tracks the vision and high-level goals for the major **v3.0.0** re
 
 ## ✅ Roadmap
 
-- **Current Version**: 2.7.5
-- **Next Milestone**: 2.8.0 (Post-Download Conversions)
-  - [ ] **Post-Download FFmpeg Pipeline**: Auto-convert `.ogg` to `.mp3` or `.mkv` to `.mp4` after completion.
+- **Current Version**: 2.8.0
+- **Completed in v2.8.0**:
+  - [x] **File Manager**: Dedicated Files tab to manage the download list, search, filter, open files/folders, and delete items from history or disk.
+  - [x] **FastTelethon Parallel Downloader**: 4-worker chunk streaming (512KB chunks) for turbo download speeds.
+  - [x] **Re-downloading Deleted Files**: Automatic physical disk presence verification.
+  - [x] **Publication Date Filename Prefixing**: Date-based media naming and clean untitled video/photo naming.
   - [x] **Custom Folder Naming**: Support `{username}` and `{channel_id}` placeholders in the download path template.
   - [x] **Forum Auto-separation**: Option to automatically download all topics from a forum into separate subfolders named after the topics when the main channel ID is provided.
-- **Primary Goal**: 3.0.0 (The Media Operating System)
+- **Next Milestone**: 3.0.0 (The Media Operating System)
 

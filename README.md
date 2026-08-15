@@ -19,12 +19,26 @@ Eliminated cross-channel ID collisions. Download completion and selection status
 ### 🎨 Theme-Aware Context Menus
 Context menus (Right-Click) now dynamically adopt the application's theme, providing a consistent premium experience in both Light and Dark modes.
 
+### 📁 Downloaded Files Manager
+A dedicated **Files** management dashboard allowing you to search, filter, and organize all completed downloads. Easily open files, show them in File Explorer, remove items from download history, or permanently delete files from disk with multi-select bulk operations.
+
+### ⚡ FastTelethon Multi-Part Turbo Downloader
+Equipped with parallel chunk streaming (4 worker connections x 512 KB chunks) for media files > 1 MB, achieving maximum network throughput and up to 10x–20x faster download speeds.
+
+### 🔄 Smart Re-Download of Deleted Files
+Built-in physical disk presence verification. If you delete any files or folders from your computer, the app detects the missing files and allows you to re-download them seamlessly.
+
+### 📅 Publication Date Media Naming
+All downloaded media (images, videos, documents, audio) can now be automatically prefixed with their publication date (e.g. `2026-01-01_filename.mp4` or `2026-01-01_Photo_123.jpg`), replacing random numeric document IDs for videos and keeping download folders organized chronologically.
+
 ---
 
 ## Features
 
+- 📁 **File Manager** — dedicated management tab to view, search, open, and delete downloaded items
+- ⚡ **FastTelethon Turbo Engine** — multi-part parallel chunk streaming for ultra-fast downloads
 - 💎 **Premium Sidebar** — sleek, icon-based navigation with professional typography
-- 📊 **Global Dashboard Status** — real-time session stats, total progress %, and combined speed
+- 📊 **Global Dashboard Status** — real-time session stats, total progress %, and smoothed combined speed
 - 🔔 **Native Notifications** — system-level alerts when your downloads are ready
 - 🖱 **Intuitive Gestures** — double-click cards to open folders; auto-focus search on open
 - 🔄 **Queue Prioritization** — move entire download batches up or down to manage your queue
@@ -33,13 +47,14 @@ Context menus (Right-Click) now dynamically adopt the application's theme, provi
 - 📥 **Empty State Screens** — friendly placeholders on Home and Downloads before any tasks are added
 - 📂 **Media Browser** — category-based file browser (Media, Files, Music, Links, GIFs)
 - ⚡ **Parallel Fetch** — all categories load simultaneously via `asyncio.gather` (~5x faster)
-- 🔁 **Smart Deduplication** — skips already-downloaded files by name and size
+- 🔁 **Smart Deduplication** — skips already-downloaded files by name and size with physical disk checks
+- 📅 **Publication Date Naming** — automatically prefix files with `YYYY-MM-DD` and cleanly name untitled videos/photos
 - ⏸ **Concurrent Downloads** — configurable parallel streams with pause / resume support
-- 📊 **Per-file Progress Bars** — live speed display (KB/s / MB/s) per file
+- 📊 **Per-file Progress Bars** — live speed display (KB/s / MB/s) with EMA smoothing
 - **Speed Limiter** — configurable max download speed in Settings
 - **Proxy Support** — SOCKS4, SOCKS5, HTTP, and MTProto configuration
 - **Theme Toggle** — Light and Dark mode with persistent session saving
-- **Persistent Queue** — saves and restores on restart automatically
+- **Persistent Queue** — saves and restores on restart automatically with SQLite
 - **Cross-Platform** — standalone executables for Windows, Linux, and macOS
 
 ---
@@ -121,6 +136,7 @@ Context menus (Right-Click) now dynamically adopt the application's theme, provi
 4. Browse files by category — use **Select All** or check individual files.
 5. Click **Download Selected** to add them to your queue.
 6. Track live progress, total queue stats, and session throughput in the **Downloads** tab.
+7. Manage your completed downloads in the **Files** tab (open files, show in explorer, delete from list or disk).
 
 ### Resuming Downloads
 
@@ -133,6 +149,18 @@ Go to **Settings → Download Limit** to adjust how many files download simultan
 ---
 
 ## Changelog
+
+### v2.8.0
+- 📁 **Dedicated File Manager**: Added a full-featured "Files" tab in the sidebar to manage your download list, search and filter files by category/status, view total disk usage, open files/folders directly, and delete items from history or disk.
+- ⚡ **FastTelethon Turbo Multi-Part Downloader**: Integrated high-speed parallel chunk streaming (4 worker streams x 512KB chunks) for large files (>1 MB), providing up to 10x–20x faster download throughput.
+- 🔄 **Re-downloading Deleted Files**: Added physical disk presence scanning (`os.path.exists`) so deleting files/folders from your computer allows them to be re-downloaded seamlessly rather than getting stuck in a false completed state.
+- 📊 **Silky-Smooth Speed Tracking**: Implemented Exponential Moving Average (EMA) speed smoothing to eliminate erratic speed jumping in the UI.
+- 🛡️ **Multi-Category Bulk Download Fix**: Fixed ghost card collisions and category filtering in bulk mode.
+
+### v2.7.7
+- 📅 **Publication-Date Filename Formatting**: Added option to prefix all downloaded media (images, videos, documents, audio) with publication date (`YYYY-MM-DD_<filename>`) for tidy chronological organization.
+- 🎥 **Clean Video & Media Naming**: Replaced random Telegram 64-bit document IDs for videos without metadata names with clean, predictable identifiers (`Video_<id>.mp4` / `2026-01-01_Video_<id>.mp4`).
+- ⚙️ **GUI Config Toggle**: Added "Prefix Filenames with Publication Date (YYYY-MM-DD)" checkbox under Download Settings.
 
 ### v2.7.6
 - 🔄 **Prevent File Overwriting**: Added option to rename duplicate files with a suffix (e.g. `video (2).mp4`) instead of overwriting, with persistent resume mapping in the SQLite database.

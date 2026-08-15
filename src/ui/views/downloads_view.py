@@ -27,7 +27,7 @@ class CompletedDownloadRow(QFrame):
         
         lbl_folder = QLabel(f"Saved to: {self.folder_name}")
         lbl_folder.setObjectName("MutedText")
-        lbl_folder.setStyleSheet("font-size: 8.5pt;")
+        lbl_folder.setStyleSheet("font-size: 11px;")
         
         btn_layout = QHBoxLayout()
         btn_open = QPushButton("📂 Open Folder")

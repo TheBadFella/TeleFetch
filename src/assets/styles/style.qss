@@ -485,3 +485,27 @@ QStatusBar QLabel {
     font-size: 11px;
     font-weight: 600;
 }
+
+/* File Table */
+QTableWidget#FileTable {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+    gridline-color: #F1F5F9;
+    color: #1E293B;
+    selection-background-color: #F1F5F9;
+    selection-color: #1E293B;
+}
+QTableWidget#FileTable::item {
+    padding: 6px;
+    border-bottom: 1px solid #F1F5F9;
+}
+QTableWidget#FileTable QHeaderView::section {
+    background-color: #F8FAFC;
+    color: #64748B;
+    font-weight: 700;
+    font-size: 12px;
+    border: none;
+    border-bottom: 2px solid #E2E8F0;
+    padding: 8px 6px;
+}

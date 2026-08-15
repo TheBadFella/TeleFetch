@@ -17,6 +17,8 @@ from telethon.tl.types import (
     MessageMediaDocument
 )
 from database import save_task_db, load_active_tasks_db, remove_task_db, cache_media_list, mark_media_completed, get_completed_state_db
+from utils.file_utils import get_media_filename
+from utils.fast_telethon import fast_download_file
 
 def load_active_tasks():
     return load_active_tasks_db()
@@ -187,28 +189,28 @@ async def fetch_channel(client, channel_input):
 import time
 
 def get_unique_filepath(folder, filename):
+    os.makedirs(folder, exist_ok=True)
     base, ext = os.path.splitext(filename)
     counter = 1
-    new_filepath = os.path.join(folder, filename)
-    while True:
+    new_filename = filename
+    new_filepath = os.path.join(folder, new_filename)
+    while os.path.exists(new_filepath):
         try:
-            # Atomically check and reserve the filepath
-            with open(new_filepath, 'x'):
-                pass
-            return new_filepath
-        except FileExistsError:
-            counter += 1
-            new_filename = f"{base} ({counter}){ext}"
-            new_filepath = os.path.join(folder, new_filename)
+            if os.path.getsize(new_filepath) == 0:
+                return new_filepath
         except Exception:
-            # Fallback if any other OS error occurs
-            return new_filepath
+            pass
+        counter += 1
+        new_filename = f"{base} ({counter}){ext}"
+        new_filepath = os.path.join(folder, new_filename)
+    return new_filepath
 
 async def download_single_file(client, channel, message, folder_name, progress_cb=None, complete_cb=None, cancel_event=None, max_speed_kb=None):
     from ui.views.settings_view import load_config
     cfg = load_config()
     rename_duplicates = cfg.get("rename_duplicates", True)
     use_message_date = cfg.get("use_message_date", True)
+    prefix_file_date = cfg.get("prefix_file_date", True)
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -221,13 +223,7 @@ async def download_single_file(client, channel, message, folder_name, progress_c
             )
             
             # Deduplication Check
-            file_name = None
-            if getattr(message, 'file', None):
-                try:
-                    file_name = message.file.name or f"{message.file.id}{message.file.ext}"
-                except AttributeError:
-                    # Fallback for Telethon 1.38.x PhotoSize bug during file.id generation
-                    file_name = message.file.name or f"msg_{message.id}{message.file.ext}"
+            file_name = get_media_filename(message, prefix_date=prefix_file_date)
             
             expected_filepath = None
             if file_name:
@@ -262,6 +258,7 @@ async def download_single_file(client, channel, message, folder_name, progress_c
             start_time = [time.time()]
             last_bytes = [0]
             is_first_cb = [True]
+            smoothed_speed = [0.0]
             
             class PauseRequested(Exception): pass
             
@@ -279,20 +276,27 @@ async def download_single_file(client, channel, message, folder_name, progress_c
 
                 now = time.time()
                 elapsed = now - start_time[0]
-                if elapsed >= 0.1:
+                if elapsed >= 0.2:
                     bytes_diff = current - last_bytes[0]
-                    speed_kb_s = (bytes_diff / elapsed) / 1024
+                    instant_speed_kb_s = (bytes_diff / elapsed) / 1024
                     
-                    if max_speed_kb and speed_kb_s > max_speed_kb:
+                    if max_speed_kb and instant_speed_kb_s > max_speed_kb:
                         expected_time = (bytes_diff / 1024) / max_speed_kb
                         sleep_time = expected_time - elapsed
                         if sleep_time > 0:
                             await asyncio.sleep(sleep_time)
                             now = time.time()
                             elapsed = now - start_time[0]
-                            speed_kb_s = (bytes_diff / elapsed) / 1024
+                            instant_speed_kb_s = (bytes_diff / elapsed) / 1024
 
-                    speed_str = f"{(speed_kb_s/1024):.1f} MB/s" if speed_kb_s > 1024 else f"{int(speed_kb_s)} KB/s"
+                    # Exponential Moving Average for silky smooth speed output
+                    if smoothed_speed[0] <= 0.0:
+                        smoothed_speed[0] = instant_speed_kb_s
+                    else:
+                        smoothed_speed[0] = 0.7 * smoothed_speed[0] + 0.3 * instant_speed_kb_s
+
+                    speed_val = smoothed_speed[0]
+                    speed_str = f"{(speed_val/1024):.1f} MB/s" if speed_val > 1024 else f"{int(speed_val)} KB/s"
                     start_time[0] = now
                     last_bytes[0] = current
                     if progress_cb:
@@ -302,66 +306,96 @@ async def download_single_file(client, channel, message, folder_name, progress_c
             target_path = expected_filepath if file_name else dir_path
             
             file_path = None
-            try:
-                file_path = await message.download_media(
-                    file=target_path,
-                    progress_callback=internal_progress,
-                )
-            except PauseRequested:
-                if complete_cb: complete_cb(message.id, paused=True, filepath=None)
-                return
-            except AttributeError as attr_err:
-                # Fallback for Telethon 1.38.x PhotoSize bug ('PhotoSize' object has no attribute 'location')
-                if "location" in str(attr_err) and getattr(message, 'photo', None):
-                    try:
-                        # Strategy 1: Download the photo object directly (higher level, often bypasses the bug)
-                        file_path = await client.download_media(
-                            message.photo,
-                            file=target_path,
-                            progress_callback=internal_progress
-                        )
-                    except Exception as e2:
-                        print(f"Fallback Strategy 1 failed: {e2}")
-                        # Strategy 2: Manual construction of InputPhotoFileLocation (lowest level)
-                        from telethon.tl.types import InputPhotoFileLocation
-                        photo = message.photo
-                        best_size = None
-                        if photo.sizes:
-                            for sz in reversed(photo.sizes):
-                                if hasattr(sz, 'type'):
-                                    best_size = sz
-                                    break
-                        
-                        if best_size:
-                            loc = InputPhotoFileLocation(
-                                id=photo.id,
-                                access_hash=photo.access_hash,
-                                file_reference=photo.file_reference,
-                                thumb_size=best_size.type
+
+            # 🚀 Strategy 0: High-Speed FastTelethon Parallel Chunk Downloader for files > 1MB
+            if file_size and file_size > 1024 * 1024 and expected_filepath:
+                try:
+                    from telethon.utils import get_input_location
+                    doc = getattr(message, 'document', None)
+                    video = getattr(message, 'video', None)
+                    photo = getattr(message, 'photo', None)
+                    target_obj = doc or video or photo
+                    if target_obj:
+                        location = get_input_location(target_obj)
+                        if location:
+                            success = await fast_download_file(
+                                client=client,
+                                location=location,
+                                target_path=expected_filepath,
+                                file_size=file_size,
+                                progress_callback=internal_progress,
+                                cancel_event=cancel_event,
+                                workers=4
                             )
-                            # If target_path is a directory, specify a filename
-                            final_target = target_path
-                            if os.path.isdir(final_target):
-                                final_target = os.path.join(final_target, f"Photo_{message.id}.jpg")
+                            if success and os.path.exists(expected_filepath):
+                                file_path = expected_filepath
+                except PauseRequested:
+                    if complete_cb: complete_cb(message.id, paused=True, filepath=None)
+                    return
+                except Exception as fast_err:
+                    print(f"FastTelethon fallback for {message.id}: {fast_err}")
+
+            if not file_path:
+                try:
+                    file_path = await message.download_media(
+                        file=target_path,
+                        progress_callback=internal_progress,
+                    )
+                except PauseRequested:
+                    if complete_cb: complete_cb(message.id, paused=True, filepath=None)
+                    return
+                except AttributeError as attr_err:
+                    # Fallback for Telethon 1.38.x PhotoSize bug ('PhotoSize' object has no attribute 'location')
+                    if "location" in str(attr_err) and getattr(message, 'photo', None):
+                        try:
+                            # Strategy 1: Download the photo object directly (higher level, often bypasses the bug)
+                            file_path = await client.download_media(
+                                message.photo,
+                                file=target_path,
+                                progress_callback=internal_progress
+                            )
+                        except Exception as e2:
+                            print(f"Fallback Strategy 1 failed: {e2}")
+                            # Strategy 2: Manual construction of InputPhotoFileLocation (lowest level)
+                            from telethon.tl.types import InputPhotoFileLocation
+                            photo = message.photo
+                            best_size = None
+                            if photo.sizes:
+                                for sz in reversed(photo.sizes):
+                                    if hasattr(sz, 'type'):
+                                        best_size = sz
+                                        break
                             
-                            try:
-                                file_path = await client.download_file(
-                                    loc,
-                                    file=final_target,
-                                    progress_callback=internal_progress,
+                            if best_size:
+                                loc = InputPhotoFileLocation(
+                                    id=photo.id,
+                                    access_hash=photo.access_hash,
+                                    file_reference=photo.file_reference,
+                                    thumb_size=best_size.type
                                 )
-                            except PauseRequested:
-                                if complete_cb: complete_cb(message.id, paused=True, filepath=None)
-                                return
-                            except Exception as e3:
-                                print(f"Fallback Strategy 2 failed: {e3}")
-                                # If both fail, we re-raise the original error to allow retry logic to take over
+                                # If target_path is a directory, specify a filename
+                                final_target = target_path
+                                if os.path.isdir(final_target):
+                                    final_target = os.path.join(final_target, file_name or f"Photo_{message.id}.jpg")
+                                
+                                try:
+                                    file_path = await client.download_file(
+                                        loc,
+                                        file=final_target,
+                                        progress_callback=internal_progress,
+                                    )
+                                except PauseRequested:
+                                    if complete_cb: complete_cb(message.id, paused=True, filepath=None)
+                                    return
+                                except Exception as e3:
+                                    print(f"Fallback Strategy 2 failed: {e3}")
+                                    # If both fail, we re-raise the original error to allow retry logic to take over
+                                    raise attr_err
+                            else:
+                                print("Fallback Strategy 2 failed: No best_size found")
                                 raise attr_err
-                        else:
-                            print("Fallback Strategy 2 failed: No best_size found")
-                            raise attr_err
-                else:
-                    raise attr_err
+                    else:
+                        raise attr_err
 
             if complete_cb:
                 complete_cb(message.id, filepath=file_path)
@@ -403,22 +437,24 @@ async def download_single_file(client, channel, message, folder_name, progress_c
                     except: pass
             else:
                 print(f"Error downloading message {message.id} after {max_retries} attempts: {e}")
-                if complete_cb: complete_cb(message.id, paused=False)
+                if complete_cb: complete_cb(message.id, paused=False, error=True)
 
 async def download_in_batches_headless(client, channel, messages, folder_name, batch_size, downloaded_state, progress_cb, complete_cb, task_cancel_event=None, max_speed_kb=None, msg_folder_resolver=None):
     semaphore = asyncio.Semaphore(batch_size)
     
-    def internal_complete(msg_id, paused=False, filepath=None):
-        if not paused:
-            # Persistent state in SQLite
+    def internal_complete(msg_id, paused=False, filepath=None, error=False):
+        if not paused and not error and filepath:
+            # Persistent state in SQLite - only mark completed if file was actually downloaded
             from telethon.utils import get_peer_id
+            from database import mark_media_completed, update_media_downloaded_path
             try:
                 ch_id = get_peer_id(channel)
                 mark_media_completed(ch_id, msg_id)
+                update_media_downloaded_path(ch_id, msg_id, filepath)
             except: pass
             downloaded_state.add(msg_id)
         if complete_cb:
-            complete_cb(msg_id, paused=paused, filepath=filepath)
+            complete_cb(msg_id, paused=paused, filepath=filepath, error=error)
 
     async def download_message(message):
         async with semaphore:
@@ -437,7 +473,7 @@ async def get_messages_by_type(client, channel, media_choice, min_id=None, max_i
     media_choice: 
     1 - Images
     2 - Videos
-    3 - PDFs
+    3 - Files & Documents
     4 - ZIP files
     5 - Audio files
     6 - All Media
@@ -447,26 +483,55 @@ async def get_messages_by_type(client, channel, media_choice, min_id=None, max_i
         filter_type = InputMessagesFilterPhotos()
     elif media_choice == 2:
         filter_type = InputMessagesFilterVideo()
-    elif media_choice in [3, 4, 5]:
+    elif media_choice in [3, 4]:
         filter_type = InputMessagesFilterDocument()
+    elif media_choice == 5:
+        filter_type = InputMessagesFilterMusic()
     else:
         filter_type = None # All media
         
     kwargs = {"limit": limit}
-    if filter_type: kwargs["filter"] = filter_type
     if min_id: kwargs["min_id"] = min_id
     if max_id: kwargs["max_id"] = max_id
     if topic_id: kwargs["reply_to"] = topic_id
 
+    # Handle Audio / Voice combined fetch
+    if media_choice == 5:
+        try:
+            music_msgs = await client.get_messages(channel, filter=InputMessagesFilterMusic(), **kwargs)
+        except Exception:
+            music_msgs = []
+        try:
+            voice_msgs = await client.get_messages(channel, filter=InputMessagesFilterVoice(), **kwargs)
+        except Exception:
+            voice_msgs = []
+        try:
+            doc_msgs = await client.get_messages(channel, filter=InputMessagesFilterDocument(), **kwargs)
+            audio_docs = [m for m in doc_msgs if getattr(m, 'document', None) and getattr(m.document, 'mime_type', '').startswith("audio/")]
+        except Exception:
+            audio_docs = []
+            
+        combined_dict = {m.id: m for m in (list(music_msgs) + list(voice_msgs) + list(audio_docs))}
+        return sorted(combined_dict.values(), key=lambda x: x.id, reverse=True)
+
+    if filter_type:
+        kwargs["filter"] = filter_type
+
     messages = await client.get_messages(channel, **kwargs)
     
-    # Post-filtering for document types
+    # Post-filtering
     if media_choice == 3:
-        messages = [m for m in messages if m.document and m.document.mime_type == "application/pdf"]
+        # Keep all valid documents
+        messages = [m for m in messages if getattr(m, 'document', None) is not None]
     elif media_choice == 4:
-        messages = [m for m in messages if m.document and m.document.mime_type == "application/zip"]
-    elif media_choice == 5:
-        messages = [m for m in messages if m.document and m.document.mime_type.startswith("audio/")]
+        # ZIPs and compressed archives
+        messages = [m for m in messages if getattr(m, 'document', None) and getattr(m.document, 'mime_type', '') in [
+            "application/zip", "application/x-rar-compressed", "application/x-7z-compressed",
+            "application/x-tar", "application/gzip", "application/x-bzip2"
+        ]]
+    elif media_choice == 6:
+        # Only messages that actually contain media (photos, videos, docs, audios) - exclude plain text
+        messages = [m for m in messages if getattr(m, 'media', None) is not None]
         
     return messages
 

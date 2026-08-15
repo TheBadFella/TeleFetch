@@ -407,12 +407,22 @@ class DownloadCard(QWidget):
                 missing += 1
                 row.icon.setText("❓")
                 row.bar.setProperty("state", "idle")
+                try:
+                    from database import unmark_media_completed
+                    c_id = self.task_id.split('_')[0].replace("-100", "", 1)
+                    unmark_media_completed(c_id, msg_id)
+                except Exception: pass
             else:
                 actual_size = os.path.getsize(fpath)
                 if meta["size"] > 0 and actual_size != meta["size"]:
                     corrupt += 1
                     row.icon.setText("⚠️")
                     row.bar.setProperty("state", "paused")
+                    try:
+                        from database import unmark_media_completed
+                        c_id = self.task_id.split('_')[0].replace("-100", "", 1)
+                        unmark_media_completed(c_id, msg_id)
+                    except Exception: pass
                 else:
                     valid += 1
                     row.icon.setText("✅")
@@ -421,9 +431,8 @@ class DownloadCard(QWidget):
             row.bar.style().polish(row.bar)
             
         if corrupt > 0 or missing > 0:
-            self.lbl_verify_status.setText(f"Done: {valid} OK, {corrupt} Corrupt, {missing} Missing")
-            self.lbl_verify_status.setStyleSheet("color: #EF4444;") # Red
-            self.btn_verify.setText("🛡️ Fix 0%?") # Mock button text change
+            self.lbl_verify_status.setText(f"Found {missing} missing/deleted files. Click Resume to re-download.")
+            self.lbl_verify_status.setStyleSheet("color: #F59E0B;")
         else:
             self.lbl_verify_status.setText("All files verified successfully!")
             self.lbl_verify_status.setStyleSheet("color: #10B981;") # Green

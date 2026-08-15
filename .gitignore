@@ -19,3 +19,4 @@ downloader.db
 config.json
 dist/
 build
+*.log
