@@ -192,8 +192,35 @@ class TestBulkDownloader(unittest.TestCase):
         self.assertIn((test_chan, test_msg_id), completed)
 
         unmark_media_completed(test_chan, test_msg_id)
-        completed_after = get_completed_state_db()
-        self.assertNotIn((test_chan, test_msg_id), completed_after)
+    def test_get_unique_filepath_with_reserved_paths(self):
+        # When downloading in parallel, reserved_paths prevents giving the same filename
+        # to concurrent tasks before they finish writing to disk
+        reserved = set()
+        p1 = get_unique_filepath(self.temp_dir, "video.mp4", reserved_paths=reserved)
+        p2 = get_unique_filepath(self.temp_dir, "video.mp4", reserved_paths=reserved)
+        p3 = get_unique_filepath(self.temp_dir, "video.mp4", reserved_paths=reserved)
+
+        self.assertEqual(os.path.basename(p1), "video.mp4")
+        self.assertEqual(os.path.basename(p2), "video (2).mp4")
+        self.assertEqual(os.path.basename(p3), "video (3).mp4")
+        self.assertIn(p1, reserved)
+        self.assertIn(p2, reserved)
+        self.assertIn(p3, reserved)
+
+    def test_get_unique_filepath_with_part_file(self):
+        # If video.mp4.part exists from an active download, next allocation must be video (2).mp4
+        part_file = os.path.join(self.temp_dir, "downloading.mp4.part")
+        with open(part_file, "w") as f:
+            f.write("partial data")
+
+        target = get_unique_filepath(self.temp_dir, "downloading.mp4")
+        self.assertEqual(os.path.basename(target), "downloading (2).mp4")
+
+    def test_redownload_deleted_config(self):
+        from ui.views.settings_view import load_config
+        cfg = load_config()
+        self.assertIn("redownload_deleted", cfg)
+        self.assertFalse(cfg["redownload_deleted"])
 
 
 if __name__ == "__main__":

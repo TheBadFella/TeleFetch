@@ -150,6 +150,11 @@ Go to **Settings → Download Limit** to adjust how many files download simultan
 
 ## Changelog
 
+### v2.8.1
+- 🛡️ **Concurrent Duplicate Renaming Fix**: Resolved parallel download race conditions in `get_unique_filepath` by dynamically reserving in-flight filenames and detecting `.part` files, preventing simultaneous duplicate downloads from colliding or abandoning `.part` files.
+- ⚙️ **Configurable Moved/Deleted Files Re-download**: Added a toggle under Download Settings (`"Re-download Files If Deleted/Moved from Folder"`, default disabled) so moving completed downloads to other folders or drives won't trigger unwanted re-downloads.
+- 🧹 **FastTelethon Error Cleanup**: Added automatic removal of `.part` temporary files on download failure or cancellation.
+
 ### v2.8.0
 - 📁 **Dedicated File Manager**: Added a full-featured "Files" tab in the sidebar to manage your download list, search and filter files by category/status, view total disk usage, open files/folders directly, and delete items from history or disk.
 - ⚡ **FastTelethon Turbo Multi-Part Downloader**: Integrated high-speed parallel chunk streaming (4 worker streams x 512KB chunks) for large files (>1 MB), providing up to 10x–20x faster download throughput.

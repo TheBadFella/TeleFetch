@@ -188,24 +188,40 @@ async def fetch_channel(client, channel_input):
         raise Exception(error_msg) # Re-raise with the helpful tip
 import time
 
-def get_unique_filepath(folder, filename):
+def get_unique_filepath(folder, filename, reserved_paths=None):
     os.makedirs(folder, exist_ok=True)
     base, ext = os.path.splitext(filename)
     counter = 1
     new_filename = filename
     new_filepath = os.path.join(folder, new_filename)
-    while os.path.exists(new_filepath):
-        try:
-            if os.path.getsize(new_filepath) == 0:
-                return new_filepath
-        except Exception:
-            pass
+
+    def is_occupied(path):
+        # 1. Check in-memory reservation for concurrent downloads
+        if reserved_paths is not None and path in reserved_paths:
+            return True
+        # 2. Check if file exists on disk with content > 0 bytes
+        if os.path.exists(path):
+            try:
+                if os.path.getsize(path) > 0:
+                    return True
+            except Exception:
+                return True
+        # 3. Check if active/in-progress .part file exists
+        if os.path.exists(path + ".part"):
+            return True
+        return False
+
+    while is_occupied(new_filepath):
         counter += 1
         new_filename = f"{base} ({counter}){ext}"
         new_filepath = os.path.join(folder, new_filename)
+
+    if reserved_paths is not None:
+        reserved_paths.add(new_filepath)
+
     return new_filepath
 
-async def download_single_file(client, channel, message, folder_name, progress_cb=None, complete_cb=None, cancel_event=None, max_speed_kb=None):
+async def download_single_file(client, channel, message, folder_name, progress_cb=None, complete_cb=None, cancel_event=None, max_speed_kb=None, reserved_paths=None):
     from ui.views.settings_view import load_config
     cfg = load_config()
     rename_duplicates = cfg.get("rename_duplicates", True)
@@ -236,13 +252,17 @@ async def download_single_file(client, channel, message, folder_name, progress_c
                     if db_filename:
                         expected_filepath = os.path.join(folder_name, db_filename)
                         if not os.path.exists(expected_filepath):
-                            expected_filepath = get_unique_filepath(folder_name, file_name)
+                            expected_filepath = get_unique_filepath(folder_name, file_name, reserved_paths=reserved_paths)
                             update_media_downloaded_path(c_id, message.id, os.path.basename(expected_filepath))
+                        elif reserved_paths is not None:
+                            reserved_paths.add(expected_filepath)
                     else:
-                        expected_filepath = get_unique_filepath(folder_name, file_name)
+                        expected_filepath = get_unique_filepath(folder_name, file_name, reserved_paths=reserved_paths)
                         update_media_downloaded_path(c_id, message.id, os.path.basename(expected_filepath))
                 else:
                     expected_filepath = os.path.join(folder_name, file_name)
+                    if reserved_paths is not None:
+                        reserved_paths.add(expected_filepath)
             
             if expected_filepath:
                 if os.path.exists(expected_filepath):
@@ -435,6 +455,7 @@ async def download_single_file(client, channel, message, folder_name, progress_c
 
 async def download_in_batches_headless(client, channel, messages, folder_name, batch_size, downloaded_state, progress_cb, complete_cb, task_cancel_event=None, max_speed_kb=None, msg_folder_resolver=None):
     semaphore = asyncio.Semaphore(batch_size)
+    reserved_paths = set()
     
     def internal_complete(msg_id, paused=False, filepath=None, error=False):
         if not paused and not error and filepath:
@@ -456,7 +477,7 @@ async def download_in_batches_headless(client, channel, messages, folder_name, b
                 if complete_cb: complete_cb(message.id, paused=True, filepath=None)
                 return
             target_folder = msg_folder_resolver(message) if msg_folder_resolver else folder_name
-            await download_single_file(client, channel, message, target_folder, progress_cb, internal_complete, task_cancel_event, max_speed_kb)
+            await download_single_file(client, channel, message, target_folder, progress_cb, internal_complete, task_cancel_event, max_speed_kb, reserved_paths=reserved_paths)
 
     tasks = [download_message(m) for m in messages if m.id not in downloaded_state]
     if tasks:

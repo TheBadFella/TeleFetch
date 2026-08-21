@@ -106,6 +106,11 @@ async def fast_download_file(client, location, target_path, file_size, dc_id=Non
     try:
         tasks = [asyncio.create_task(worker()) for _ in range(min(workers, total_parts))]
         await asyncio.gather(*tasks)
+    except Exception as e:
+        if os.path.exists(temp_path):
+            try: os.remove(temp_path)
+            except: pass
+        raise e
     finally:
         file_handle.close()
 

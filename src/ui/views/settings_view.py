@@ -21,6 +21,7 @@ def load_config():
         "rename_duplicates": True,
         "use_message_date": True,
         "prefix_file_date": True,
+        "redownload_deleted": False,
         "dark_mode": None,  # None = follow Windows system setting
         "proxy": {
             "enabled": False,
@@ -139,6 +140,10 @@ class SettingsView(QWidget):
         self.chk_prefix_file_date = QCheckBox("Prefix Filenames with Publication Date (YYYY-MM-DD)")
         self.chk_prefix_file_date.setToolTip("Prepend the message publication date (e.g. 2026-01-01_filename.mp4) to all downloaded media for tidy chronological organization.")
         self.clayout.addWidget(self.chk_prefix_file_date)
+
+        self.chk_redownload_deleted = QCheckBox("Re-download Files If Deleted/Moved from Folder")
+        self.chk_redownload_deleted.setToolTip("When enabled, if a downloaded file is moved or deleted from the destination folder, it will be re-downloaded on the next run. When disabled (recommended if you organize files into other folders), downloaded items are remembered by the database and won't be re-downloaded.")
+        self.clayout.addWidget(self.chk_redownload_deleted)
 
         self.clayout.addWidget(self._create_divider())
 
@@ -283,6 +288,7 @@ class SettingsView(QWidget):
         self.chk_rename_duplicates.setChecked(config.get("rename_duplicates", True))
         self.chk_use_msg_date.setChecked(config.get("use_message_date", True))
         self.chk_prefix_file_date.setChecked(config.get("prefix_file_date", True))
+        self.chk_redownload_deleted.setChecked(config.get("redownload_deleted", False))
         
         proxy = config.get("proxy", {})
         self.chk_enable_proxy.setChecked(proxy.get("enabled", False))
@@ -302,6 +308,7 @@ class SettingsView(QWidget):
             "rename_duplicates": self.chk_rename_duplicates.isChecked(),
             "use_message_date": self.chk_use_msg_date.isChecked(),
             "prefix_file_date": self.chk_prefix_file_date.isChecked(),
+            "redownload_deleted": self.chk_redownload_deleted.isChecked(),
             "proxy": {
                 "enabled": self.chk_enable_proxy.isChecked(),
                 "type": self.combo_proxy_type.currentText(),

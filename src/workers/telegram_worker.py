@@ -568,25 +568,28 @@ class TelegramWorker(QThread):
                 folder_name = os.path.abspath(folder_name)
 
             # 🛡️ Verify physical disk presence for downloaded files (support re-download if deleted)
-            prefix_file_date = cfg.get("prefix_file_date", True)
-            actual_downloaded_state = set()
-            for msg in messages:
-                fname = get_media_filename(msg, prefix_date=prefix_file_date)
-                target_f = msg_folder_resolver(msg) if msg_folder_resolver else folder_name
-                fpath = os.path.join(target_f, fname) if fname else None
-                
-                # Check if file really exists on disk with non-zero bytes
-                if msg.id in downloaded_state and fpath and os.path.exists(fpath) and os.path.getsize(fpath) > 0:
-                    actual_downloaded_state.add(msg.id)
-                elif msg.id in downloaded_state:
-                    # File was deleted from disk! Unmark in DB
-                    try:
-                        from database import unmark_media_completed
-                        c_id = str(resolved_chan_id).replace("-100", "", 1)
-                        unmark_media_completed(c_id, msg.id)
-                    except Exception: pass
+            redownload_deleted = cfg.get("redownload_deleted", False)
+            if redownload_deleted:
+                prefix_file_date = cfg.get("prefix_file_date", True)
+                actual_downloaded_state = set()
+                for msg in messages:
+                    fname = get_media_filename(msg, prefix_date=prefix_file_date)
+                    target_f = msg_folder_resolver(msg) if msg_folder_resolver else folder_name
+                    fpath = os.path.join(target_f, fname) if fname else None
+                    
+                    # Check if file really exists on disk with non-zero bytes
+                    if msg.id in downloaded_state and fpath and os.path.exists(fpath) and os.path.getsize(fpath) > 0:
+                        actual_downloaded_state.add(msg.id)
+                    elif msg.id in downloaded_state:
+                        # File was deleted from disk! Unmark in DB
+                        try:
+                            from database import unmark_media_completed
+                            c_id = str(resolved_chan_id).replace("-100", "", 1)
+                            unmark_media_completed(c_id, msg.id)
+                        except Exception: pass
 
-            downloaded_state = actual_downloaded_state
+                downloaded_state = actual_downloaded_state
+            
             messages_to_download = [m for m in messages if m.id not in downloaded_state]
             total_items = all_messages_count
             completed_initial = len(downloaded_state)

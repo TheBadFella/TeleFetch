@@ -42,7 +42,11 @@ This document tracks the vision and high-level goals for the major **v3.0.0** re
 
 ## ✅ Roadmap
 
-- **Current Version**: 2.8.0
+- **Current Version**: 2.8.1
+- **Completed in v2.8.1**:
+  - [x] **Concurrent Duplicate Renaming Fix**: In-flight file reservation & `.part` collision prevention.
+  - [x] **Configurable Moved/Deleted Files Re-download**: User setting to preserve completion state when moving files.
+  - [x] **FastTelethon Error Cleanup**: Clean up broken/orphaned `.part` files on failure or cancellation.
 - **Completed in v2.8.0**:
   - [x] **File Manager**: Dedicated Files tab to manage the download list, search, filter, open files/folders, and delete items from history or disk.
   - [x] **FastTelethon Parallel Downloader**: 4-worker chunk streaming (512KB chunks) for turbo download speeds.
