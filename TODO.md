@@ -42,7 +42,13 @@ This document tracks the vision and high-level goals for the major **v3.0.0** re
 
 ## ✅ Roadmap
 
-- **Current Version**: 2.8.1
+- **Current Version**: 2.8.2
+- **Completed in v2.8.2**:
+  - [x] **Resuming Stall Fix**: Added 25s MTProto request timeouts and retry recovery to prevent worker coroutines and concurrency slots from hanging indefinitely.
+  - [x] **Complete `.part` Finalization**: Instant detection and atomic replacement of full-sized `.part` files with Windows file-lock retry handling.
+  - [x] **Byte-Range Resumable Chunk Tracking**: Lightweight `.part.meta` chunk-state sidecars for clean interrupted download resumption.
+  - [x] **Deduplication Stability**: Preserved in-progress `.part` candidate names without runaway `(2)`, `(3)` duplicate suffix increments.
+  - [x] **Verify & Persistence Reconciliation**: Reconciled database completion states against filesystem with one-click Resume re-downloading.
 - **Completed in v2.8.1**:
   - [x] **Concurrent Duplicate Renaming Fix**: In-flight file reservation & `.part` collision prevention.
   - [x] **Configurable Moved/Deleted Files Re-download**: User setting to preserve completion state when moving files.

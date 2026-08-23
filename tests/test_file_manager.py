@@ -18,12 +18,15 @@ class TestFileManager(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.test_chan = "test_file_manager_chan_123"
+        import database
+        self.orig_db_path = database.DB_PATH
+        database.DB_PATH = os.path.join(self.temp_dir, "test_fm.db")
+        database.init_db()
 
     def tearDown(self):
+        import database
+        database.DB_PATH = self.orig_db_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
-        # Cleanup DB
-        all_items = get_all_completed_media(channel_id=self.test_chan)
-        delete_multiple_media_cache_items([(it["channel_id"], it["msg_id"]) for it in all_items])
 
     def test_add_and_query_completed_media(self):
         msg_id_1 = 1001

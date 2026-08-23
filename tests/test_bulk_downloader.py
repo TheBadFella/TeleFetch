@@ -57,8 +57,14 @@ class TestBulkDownloader(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
+        import database
+        self.orig_db_path = database.DB_PATH
+        database.DB_PATH = os.path.join(self.temp_dir, "test_downloader.db")
+        database.init_db()
 
     def tearDown(self):
+        import database
+        database.DB_PATH = self.orig_db_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_get_unique_filepath_non_destructive(self):
@@ -221,6 +227,69 @@ class TestBulkDownloader(unittest.TestCase):
         cfg = load_config()
         self.assertIn("redownload_deleted", cfg)
         self.assertFalse(cfg["redownload_deleted"])
+
+    def test_download_single_file_finalizes_existing_part_file(self):
+        from core_downloader import download_single_file
+        from telethon.tl.types import PeerChannel
+
+        file_size = 5000
+        msg = MockMessage(id=101, video=MockDocument(size=file_size))
+        
+        # Create a .part file with exact file_size on disk
+        part_file = os.path.join(self.temp_dir, f"Video_101.mp4.part")
+        target_file = os.path.join(self.temp_dir, f"Video_101.mp4")
+        with open(part_file, "wb") as f:
+            f.write(b"V" * file_size)
+
+        completed_files = []
+        def complete_cb(msg_id, filepath=None, **kwargs):
+            completed_files.append((msg_id, filepath))
+
+        channel = PeerChannel(channel_id=123456)
+
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(
+            download_single_file(None, channel, msg, self.temp_dir, complete_cb=complete_cb)
+        )
+        loop.close()
+
+        self.assertTrue(os.path.exists(target_file), "Target .mp4 file must exist after finalization")
+        self.assertFalse(os.path.exists(part_file), "Temp .part file must be removed after finalization")
+        self.assertEqual(len(completed_files), 1)
+        self.assertEqual(completed_files[0][0], 101)
+
+    def test_candidate_filepath_reuses_existing_part_without_duplicate_renaming(self):
+        from core_downloader import download_single_file
+        from database import update_media_downloaded_path, get_media_downloaded_path
+        from telethon.tl.types import PeerChannel
+        from telethon.utils import get_peer_id
+
+        channel = PeerChannel(channel_id=888999)
+        c_id = str(get_peer_id(channel)).replace("-100", "", 1)
+        msg = MockMessage(id=202, video=MockDocument(size=10000))
+
+        # Assign initial db_filename
+        update_media_downloaded_path(c_id, 202, "MyCustomVideo.mp4")
+
+        # Create .part file on disk matching that name
+        part_file = os.path.join(self.temp_dir, "MyCustomVideo.mp4.part")
+        with open(part_file, "wb") as f:
+            f.write(b"M" * 10000)
+
+        completed_files = []
+        def complete_cb(msg_id, filepath=None, **kwargs):
+            completed_files.append((msg_id, filepath))
+
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(
+            download_single_file(None, channel, msg, self.temp_dir, complete_cb=complete_cb)
+        )
+        loop.close()
+
+        # Database path must still be MyCustomVideo.mp4 (not MyCustomVideo (2).mp4)
+        db_path = get_media_downloaded_path(c_id, 202)
+        self.assertEqual(db_path, "MyCustomVideo.mp4")
+        self.assertTrue(os.path.exists(os.path.join(self.temp_dir, "MyCustomVideo.mp4")))
 
 
 if __name__ == "__main__":

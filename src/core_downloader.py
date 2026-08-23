@@ -18,7 +18,7 @@ from telethon.tl.types import (
 )
 from database import save_task_db, load_active_tasks_db, remove_task_db, cache_media_list, mark_media_completed, get_completed_state_db
 from utils.file_utils import get_media_filename
-from utils.fast_telethon import fast_download_file
+from utils.fast_telethon import fast_download_file, _atomic_finalize_sync
 
 def load_active_tasks():
     return load_active_tasks_db()
@@ -197,7 +197,7 @@ def get_unique_filepath(folder, filename, reserved_paths=None):
 
     def is_occupied(path):
         # 1. Check in-memory reservation for concurrent downloads
-        if reserved_paths is not None and path in reserved_paths:
+        if reserved_paths is not None and (path in reserved_paths or (path + ".part") in reserved_paths):
             return True
         # 2. Check if file exists on disk with content > 0 bytes
         if os.path.exists(path):
@@ -206,9 +206,13 @@ def get_unique_filepath(folder, filename, reserved_paths=None):
                     return True
             except Exception:
                 return True
-        # 3. Check if active/in-progress .part file exists
+        # 3. Check if active/in-progress .part file exists on disk with content > 0 bytes
         if os.path.exists(path + ".part"):
-            return True
+            try:
+                if os.path.getsize(path + ".part") > 0:
+                    return True
+            except Exception:
+                return True
         return False
 
     while is_occupied(new_filepath):
@@ -243,33 +247,52 @@ async def download_single_file(client, channel, message, folder_name, progress_c
             
             expected_filepath = None
             if file_name:
-                if rename_duplicates:
-                    from telethon.utils import get_peer_id
-                    from database import get_media_downloaded_path, update_media_downloaded_path
-                    c_id = str(get_peer_id(channel)).replace("-100", "", 1)
-                    
-                    db_filename = get_media_downloaded_path(c_id, message.id)
-                    if db_filename:
-                        expected_filepath = os.path.join(folder_name, db_filename)
-                        if not os.path.exists(expected_filepath):
-                            expected_filepath = get_unique_filepath(folder_name, file_name, reserved_paths=reserved_paths)
-                            update_media_downloaded_path(c_id, message.id, os.path.basename(expected_filepath))
-                        elif reserved_paths is not None:
-                            reserved_paths.add(expected_filepath)
+                from telethon.utils import get_peer_id
+                from database import get_media_downloaded_path, update_media_downloaded_path
+                c_id = str(get_peer_id(channel)).replace("-100", "", 1)
+                
+                db_filename = get_media_downloaded_path(c_id, message.id) if rename_duplicates else None
+                if db_filename:
+                    candidate_filepath = os.path.join(folder_name, db_filename)
+                    # Check if this exact file or its .part exists on disk
+                    if os.path.exists(candidate_filepath) or os.path.exists(candidate_filepath + ".part"):
+                        expected_filepath = candidate_filepath
                     else:
                         expected_filepath = get_unique_filepath(folder_name, file_name, reserved_paths=reserved_paths)
                         update_media_downloaded_path(c_id, message.id, os.path.basename(expected_filepath))
                 else:
-                    expected_filepath = os.path.join(folder_name, file_name)
-                    if reserved_paths is not None:
-                        reserved_paths.add(expected_filepath)
+                    candidate_filepath = os.path.join(folder_name, file_name)
+                    if rename_duplicates:
+                        is_candidate_reserved = reserved_paths is not None and (candidate_filepath in reserved_paths or (candidate_filepath + ".part") in reserved_paths)
+                        if (os.path.exists(candidate_filepath) or os.path.exists(candidate_filepath + ".part")) and not is_candidate_reserved:
+                            expected_filepath = candidate_filepath
+                        else:
+                            expected_filepath = get_unique_filepath(folder_name, file_name, reserved_paths=reserved_paths)
+                        update_media_downloaded_path(c_id, message.id, os.path.basename(expected_filepath))
+                    else:
+                        expected_filepath = candidate_filepath
+
+                if reserved_paths is not None:
+                    reserved_paths.add(expected_filepath)
             
             if expected_filepath:
+                # 1. Target file already completely exists
                 if os.path.exists(expected_filepath):
                     existing_size = os.path.getsize(expected_filepath)
                     if file_size and existing_size >= file_size:
                         if progress_cb:
                             progress_cb(message.id, existing_size, existing_size, speed_str="Skipped (Exists)")
+                        if complete_cb:
+                            complete_cb(message.id, filepath=expected_filepath)
+                        return
+
+                # 2. Check if .part file already matches full expected size and can be finalized immediately
+                part_path = expected_filepath + ".part"
+                meta_path = expected_filepath + ".part.meta"
+                if os.path.exists(part_path) and file_size and os.path.getsize(part_path) == file_size:
+                    if _atomic_finalize_sync(part_path, expected_filepath, meta_path):
+                        if progress_cb:
+                            progress_cb(message.id, file_size, file_size, speed_str="Complete")
                         if complete_cb:
                             complete_cb(message.id, filepath=expected_filepath)
                         return
@@ -286,19 +309,21 @@ async def download_single_file(client, channel, message, folder_name, progress_c
                 if cancel_event and cancel_event.is_set():
                     raise PauseRequested()
                 
+                tot = total or file_size or 0
                 if is_first_cb[0]:
                     is_first_cb[0] = False
                     last_bytes[0] = current
                     start_time[0] = time.time()
                     if progress_cb:
-                        progress_cb(message.id, current, total or file_size, speed_str="Resuming..." if current > 0 else "Starting...")
+                        initial_status = "Resuming..." if current > 0 else "Starting..."
+                        progress_cb(message.id, current, tot, speed_str=initial_status)
                     return
 
                 now = time.time()
                 elapsed = now - start_time[0]
                 if elapsed >= 0.2:
                     bytes_diff = current - last_bytes[0]
-                    instant_speed_kb_s = (bytes_diff / elapsed) / 1024
+                    instant_speed_kb_s = (bytes_diff / elapsed) / 1024 if elapsed > 0 else 0.0
                     
                     if max_speed_kb and instant_speed_kb_s > max_speed_kb:
                         expected_time = (bytes_diff / 1024) / max_speed_kb
@@ -307,7 +332,7 @@ async def download_single_file(client, channel, message, folder_name, progress_c
                             await asyncio.sleep(sleep_time)
                             now = time.time()
                             elapsed = now - start_time[0]
-                            instant_speed_kb_s = (bytes_diff / elapsed) / 1024
+                            instant_speed_kb_s = (bytes_diff / elapsed) / 1024 if elapsed > 0 else 0.0
 
                     # Exponential Moving Average for silky smooth speed output
                     if smoothed_speed[0] <= 0.0:
@@ -320,7 +345,7 @@ async def download_single_file(client, channel, message, folder_name, progress_c
                     start_time[0] = now
                     last_bytes[0] = current
                     if progress_cb:
-                        progress_cb(message.id, current, total or file_size, speed_str=speed_str)
+                        progress_cb(message.id, current, tot, speed_str=speed_str)
 
             dir_path = os.path.join(folder_name, "")
             target_path = expected_filepath if file_name else dir_path

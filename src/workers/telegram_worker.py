@@ -570,12 +570,20 @@ class TelegramWorker(QThread):
             # 🛡️ Verify physical disk presence for downloaded files (support re-download if deleted)
             redownload_deleted = cfg.get("redownload_deleted", False)
             if redownload_deleted:
+                from database import get_media_downloaded_path, unmark_media_completed
                 prefix_file_date = cfg.get("prefix_file_date", True)
                 actual_downloaded_state = set()
+                c_id = str(resolved_chan_id).replace("-100", "", 1)
                 for msg in messages:
                     fname = get_media_filename(msg, prefix_date=prefix_file_date)
                     target_f = msg_folder_resolver(msg) if msg_folder_resolver else folder_name
                     fpath = os.path.join(target_f, fname) if fname else None
+                    if fpath and not os.path.exists(fpath):
+                        db_fn = get_media_downloaded_path(c_id, msg.id)
+                        if db_fn:
+                            cand = os.path.join(target_f, db_fn) if not os.path.isabs(db_fn) else db_fn
+                            if os.path.exists(cand):
+                                fpath = cand
                     
                     # Check if file really exists on disk with non-zero bytes
                     if msg.id in downloaded_state and fpath and os.path.exists(fpath) and os.path.getsize(fpath) > 0:
@@ -583,10 +591,9 @@ class TelegramWorker(QThread):
                     elif msg.id in downloaded_state:
                         # File was deleted from disk! Unmark in DB
                         try:
-                            from database import unmark_media_completed
-                            c_id = str(resolved_chan_id).replace("-100", "", 1)
                             unmark_media_completed(c_id, msg.id)
-                        except Exception: pass
+                        except Exception:
+                            pass
 
                 downloaded_state = actual_downloaded_state
             

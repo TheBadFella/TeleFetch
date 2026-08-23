@@ -150,6 +150,13 @@ Go to **Settings → Download Limit** to adjust how many files download simultan
 
 ## Changelog
 
+### v2.8.2
+- ⚡ **Resuming Stall & Concurrency Deadlock Fix**: Resolved the critical issue where parallel downloads permanently froze at `Resuming...` with 0 B/s due to missing MTProto request timeouts. Added a 25s timeout with exponential retry backoff to prevent dropped connections from locking worker coroutines and exhausting concurrency slots.
+- 📦 **Instant Complete `.part` File Finalization**: Implemented instant detection and atomic finalization for `.part` files matching the expected Telegram media size. Automatically flushes file handles, atomically replaces `.part` to final filenames with Windows file-lock retry handling, and marks database records completed.
+- 🔄 **Byte-Range Resumable Chunk Tracking**: Added `.part.meta` chunk-state sidecars to record downloaded chunk indices. Paused or interrupted downloads now accurately download only missing chunks upon resume without wiping or corrupting existing progress.
+- 🏷️ **Deduplication Filename Stability**: Fixed duplicate filename generation so that restarting or resuming a task reuses its existing in-progress `.part` filename instead of repeatedly appending `(2)`, `(3)`, etc.
+- 🛡️ **Verify & Persistence Reconciliation**: Enhanced the "🛡️ Verify" button to check both primary file paths and database paths against disk. If files are deleted or moved, it cleanly reconciles database completion counters, updates progress bars, and enables the "▶ Resume" button for 1-click re-downloading.
+
 ### v2.8.1
 - 🛡️ **Concurrent Duplicate Renaming Fix**: Resolved parallel download race conditions in `get_unique_filepath` by dynamically reserving in-flight filenames and detecting `.part` files, preventing simultaneous duplicate downloads from colliding or abandoning `.part` files.
 - ⚙️ **Configurable Moved/Deleted Files Re-download**: Added a toggle under Download Settings (`"Re-download Files If Deleted/Moved from Folder"`, default disabled) so moving completed downloads to other folders or drives won't trigger unwanted re-downloads.
