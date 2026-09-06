@@ -13,6 +13,7 @@ from ui.components import auth_dialogs
 from ui.views.cleanup_view import CleanupView
 from ui.views.settings_view import SettingsView
 from ui.views.downloads_view import DownloadsView
+from ui.views.file_manager_view import FileManagerView
 from ui.views.login_view import LoginView
 from PySide6.QtGui import QCloseEvent, QAction
 from resource_utils import get_resource_path
@@ -76,6 +77,7 @@ class MainWindow(QMainWindow):
             <li>✨ <b>Instant Loading:</b> Zero-wait cached media browsing.</li>
             <li>⚡ <b>Byte-Range Resuming:</b> Flawless pause & resume via explicit offsets.</li>
             <li>🗄️ <b>SQLite Persistence:</b> Robust, crash-proof active queues.</li>
+            <li>🍎 <b>Native macOS:</b> Separate installers for Apple Silicon and Intel Macs.</li>
         </ul>
         <hr/>
         <p>Enjoying the app? Consider supporting development by starring our repository or sponsoring!</p>
@@ -204,18 +206,21 @@ class MainWindow(QMainWindow):
         self.btn_home = self._create_nav_button("Home", "home.png", True)
         self.btn_queue = self._create_nav_button("Queue", "download.png")
         self.btn_cleanup = self._create_nav_button("Cleanup", "broom.svg")
+        self.btn_files = self._create_nav_button("Files", "files.png")
         self.btn_settings = self._create_nav_button("Settings", "setting.png")
         self.btn_about = self._create_nav_button("About", "info.png")
 
         self.btn_home.clicked.connect(lambda: self.switch_page("Home", 0))
         self.btn_queue.clicked.connect(lambda: self.switch_page("Queue", 1))
         self.btn_cleanup.clicked.connect(lambda: self.switch_page("Cleanup", 2))
-        self.btn_settings.clicked.connect(lambda: self.switch_page("Settings", 3))
+        self.btn_files.clicked.connect(lambda: self.switch_page("Files", 3))
+        self.btn_settings.clicked.connect(lambda: self.switch_page("Settings", 4))
         self.btn_about.clicked.connect(lambda: self.switch_page("About", -1))
 
         sidebar_layout.addWidget(self.btn_home)
         sidebar_layout.addWidget(self.btn_queue)
         sidebar_layout.addWidget(self.btn_cleanup)
+        sidebar_layout.addWidget(self.btn_files)
         sidebar_layout.addWidget(self.btn_settings)
         sidebar_layout.addStretch()
         sidebar_layout.addWidget(self.btn_about)
@@ -268,14 +273,16 @@ class MainWindow(QMainWindow):
         
         self.page_queue = DownloadsView()
         self.page_cleanup = CleanupView()
+        self.page_files = FileManagerView()
         self.page_settings = SettingsView()
         self.page_login = LoginView()
         
-        self.stacked_widget.addWidget(self.page_home)   # Index 0
-        self.stacked_widget.addWidget(self.page_queue)  # Index 1
-        self.stacked_widget.addWidget(self.page_cleanup) # Index 2
-        self.stacked_widget.addWidget(self.page_settings) # Index 3
-        self.stacked_widget.addWidget(self.page_login)  # Index 4
+        self.stacked_widget.addWidget(self.page_home)     # Index 0
+        self.stacked_widget.addWidget(self.page_queue)    # Index 1
+        self.stacked_widget.addWidget(self.page_cleanup)  # Index 2
+        self.stacked_widget.addWidget(self.page_files)    # Index 3
+        self.stacked_widget.addWidget(self.page_settings) # Index 4
+        self.stacked_widget.addWidget(self.page_login)    # Index 5
         
         # Connect Login signals
         self.page_login.login_started.connect(self.worker.start_login)
@@ -380,9 +387,14 @@ class MainWindow(QMainWindow):
             self.header.hide()
             self.stacked_widget.setCurrentIndex(2)
             self.btn_cleanup.setChecked(True)
+        elif "Files" in item_text:
+            self.header.hide()
+            self.page_files.refresh_list()
+            self.stacked_widget.setCurrentIndex(3)
+            self.btn_files.setChecked(True)
         elif "Settings" in item_text:
             self.header.hide()
-            self.stacked_widget.setCurrentIndex(3)
+            self.stacked_widget.setCurrentIndex(4)
             self.btn_settings.setChecked(True)
         elif "About" in item_text:
             self.show_about_dialog()
@@ -391,7 +403,8 @@ class MainWindow(QMainWindow):
             if curr == 0: self.btn_home.setChecked(True)
             elif curr == 1: self.btn_queue.setChecked(True)
             elif curr == 2: self.btn_cleanup.setChecked(True)
-            elif curr == 3: self.btn_settings.setChecked(True)
+            elif curr == 3: self.btn_files.setChecked(True)
+            elif curr == 4: self.btn_settings.setChecked(True)
         else:
             self.header.hide()
 
@@ -448,6 +461,7 @@ class MainWindow(QMainWindow):
             card.deleteLater()
             del self.card_widgets[task_id]
             self.page_queue.add_completed_item(title, folder_name, task_id)
+            self.page_files.refresh_list()
             
             # Tray notification
             self.tray_icon.showMessage(
@@ -500,7 +514,11 @@ class MainWindow(QMainWindow):
             deduped = []
             for t in tasks:
                 if not isinstance(t, dict): continue
-                key = (str(t.get("channel_input")), t.get("media_id"))
+                chan = str(t.get("channel_input", "")).strip()
+                chan_key = chan.rstrip('/').split('/')[-1].replace("-100", "", 1)
+                topic = t.get("topic_id")
+                media = t.get("media_id", 6)
+                key = (chan_key, topic, media)
                 if key not in seen:
                     seen.add(key)
                     deduped.append(t)
@@ -509,6 +527,11 @@ class MainWindow(QMainWindow):
                 save_active_tasks(deduped)
                 tasks = deduped
             
+            from ui.views.settings_view import load_config
+            cfg = load_config()
+            cfg_speed = cfg.get("max_speed_kb", 0)
+            cfg_limit = cfg.get("download_limit", 5)
+
             # 🟢 Smart Startup Loader
             for i, t in enumerate(tasks):
                 if not isinstance(t, dict): continue
@@ -529,9 +552,9 @@ class MainWindow(QMainWindow):
                         "task_id": f"{ch_id_full}_{m_id}",
                         "title": t.get("title") or f"Saved Task: {chan}",
                         "is_paused": True,
-                        "download_path": t.get("download_path", "downloads"),
-                        "download_limit": t.get("download_limit", 5),
-                        "max_speed_kb": t.get("max_speed_kb", 0),
+                        "download_path": t.get("download_path") or cfg.get("download_path", "downloads"),
+                        "download_limit": cfg_limit,
+                        "max_speed_kb": cfg_speed,
                         "media_type": m_id,
                         "completed": t.get("completed", 0),
                         "folder_name": t.get("folder_name") or t.get("download_path", "downloads")
@@ -543,9 +566,9 @@ class MainWindow(QMainWindow):
                             self.worker.start_download(
                                 channel_input=t_data.get("channel_input"),
                                 media_id=t_data.get("media_id", 6),
-                                download_path=t_data.get("download_path", "downloads"),
-                                download_limit=t_data.get("download_limit", 5),
-                                max_speed_kb=t_data.get("max_speed_kb", 0),
+                                download_path=t_data.get("download_path") or cfg.get("download_path", "downloads"),
+                                download_limit=cfg_limit,
+                                max_speed_kb=cfg_speed,
                                 is_paused=False,
                                 selected_message_ids=t_data.get("selected_message_ids", None)
                             )
@@ -563,12 +586,7 @@ class MainWindow(QMainWindow):
         channel = self.input_channel.text().strip()
         if not channel: return
         
-        self.btn_fetch.setText("Fetching...")
-        self.btn_fetch.setEnabled(False)
-        from PySide6.QtWidgets import QApplication
-        QApplication.processEvents()
-        
-        # 🚀 Instant Load from Cache to "WOW" the user
+        # 🚀 Instant Load to Bulk Mode or Cache
         from database import get_cached_media
         cached = get_cached_media(channel)
         if cached:
@@ -592,13 +610,10 @@ class MainWindow(QMainWindow):
                 c_dict[k].sort(key=lambda x: x.id, reverse=True)
             
             # Show dialog immediately with cached data
-            # To avoid blocking the background fetch signal, we use a single shot timer
-            QTimer.singleShot(0, lambda: self.show_media_browser(channel, None, c_dict))
-
-        from ui.views.settings_view import load_config
-        cfg = load_config()
-        fetch_limit = cfg.get("initial_fetch_limit", 2000)
-        self.worker.fetch_media_list(channel, limit=fetch_limit)
+            self.show_media_browser(channel, None, c_dict)
+        else:
+            # Show dialog immediately in Bulk Download Mode
+            self.show_media_browser(channel, None, None)
 
     def show_media_browser(self, channel_input, channel_obj, messages_dict):
         # 🔄 Update existing dialog if it's already open (Instant Loading Flow)
@@ -648,29 +663,55 @@ class MainWindow(QMainWindow):
         dialog = MediaBrowserDialog(title, messages_dict, self, previous_selected_ids=existing_ids, is_dark=is_dark)
         self._active_media_browser = dialog
         
+        dialog.fetch_requested.connect(lambda: self._trigger_specific_fetch(channel_input, dialog))
+
         if dialog.exec():
-            selected_msgs = dialog.get_selected_messages()
-            if not selected_msgs:
-                self._active_media_browser = None
-                return # they selected nothing
-                
-            selected_ids = [m.id for m in selected_msgs]
-            
-            # If re-selecting, we use existing task_id
-            target_task_id = self._reselect_task_id
-            self._reselect_task_id = None # Clear context
-            
-            self.worker.start_download(
-                channel_input=channel_input, 
-                media_id=6, # 6 is ALL
-                download_path=cfg.get("download_path", "downloads"), 
-                download_limit=cfg.get("download_limit", 5), 
-                max_speed_kb=cfg.get("max_speed_kb", 0),
-                selected_message_ids=selected_ids,
-                task_id=target_task_id # If this is set, worker will update existing task
-            )
+            if dialog.is_bulk_mode():
+                bulk_media_ids = dialog.get_bulk_selections()
+                if not bulk_media_ids:
+                    self._active_media_browser = None
+                    return
+                for m_id in bulk_media_ids:
+                    self.worker.start_download(
+                        channel_input=channel_input,
+                        media_id=m_id,
+                        download_path=cfg.get("download_path", "downloads"),
+                        download_limit=cfg.get("download_limit", 5),
+                        max_speed_kb=cfg.get("max_speed_kb", 0),
+                        selected_message_ids=None, # This triggers the unbounded limit=None bulk fetch
+                        task_id=None
+                    )
+            else:
+                selected_msgs = dialog.get_selected_messages()
+                if not selected_msgs:
+                    self._active_media_browser = None
+                    return # they selected nothing
+
+                selected_ids = [m.id for m in selected_msgs]
+
+                # If re-selecting, we use existing task_id
+                target_task_id = self._reselect_task_id
+                self._reselect_task_id = None # Clear context
+
+                self.worker.start_download(
+                    channel_input=channel_input,
+                    media_id=6, # 6 is ALL
+                    download_path=cfg.get("download_path", "downloads"),
+                    download_limit=cfg.get("download_limit", 5),
+                    max_speed_kb=cfg.get("max_speed_kb", 0),
+                    selected_message_ids=selected_ids,
+                    task_id=target_task_id # If this is set, worker will update existing task
+                )
         
         self._active_media_browser = None
+
+    def _trigger_specific_fetch(self, channel_input, dialog):
+        dialog.btn_load_specific.setText("Fetching... Please wait.")
+        dialog.btn_load_specific.setEnabled(False)
+        from ui.views.settings_view import load_config
+        cfg = load_config()
+        fetch_limit = cfg.get("initial_fetch_limit", 2000)
+        self.worker.fetch_media_list(channel_input, limit=fetch_limit)
 
     def on_fetch_error(self, channel, err_msg):
         if self._reselect_task_id and self._reselect_task_id in self.card_widgets:
@@ -689,10 +730,30 @@ class MainWindow(QMainWindow):
         if task_id not in self.card_widgets:
             ch_resolved = str(data.get("channel_input", ""))
             original_in = str(data.get("original_input", ""))
-            m_id = data.get("media_id", 6)
+            m_id = str(data.get("media_id", 6))
+            topic_id = str(data.get("topic_id")) if data.get("topic_id") is not None else None
             
             for old_id, card in list(self.card_widgets.items()):
-                old_chan = old_id.rsplit('_', 1)[0]
+                # Parse old_id: {chan}_{topic}_{media} or {chan}_{media}
+                parts = old_id.split('_')
+                if len(parts) >= 3:
+                    old_chan = "_".join(parts[:-2])
+                    old_topic = parts[-2]
+                    old_media = parts[-1]
+                elif len(parts) == 2:
+                    old_chan = parts[0]
+                    old_topic = None
+                    old_media = parts[1]
+                else:
+                    continue
+
+                # Media ID must match
+                if old_media != m_id:
+                    continue
+                # Topic ID must match if present
+                if topic_id is not None and old_topic != topic_id:
+                    continue
+
                 # Match by original user input OR by numeric ID if it was partially resolved
                 # We also check for -100 stripped versions to be super safe.
                 if (old_chan == original_in or 

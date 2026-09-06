@@ -2,6 +2,7 @@ import sqlite3
 import os
 import json
 from resource_utils import get_project_root
+from utils.file_utils import get_media_filename
 
 DB_PATH = os.path.join(get_project_root(), "downloader.db")
 
@@ -20,10 +21,22 @@ def init_db():
         size INTEGER,
         date TEXT,
         completed INTEGER DEFAULT 0,
-        raw_json TEXT, 
+        raw_json TEXT,
+        downloaded_path TEXT,
+        channel_title TEXT,
         PRIMARY KEY (msg_id, channel_id)
     )
     """)
+    
+    try:
+        cursor.execute("ALTER TABLE media_cache ADD COLUMN downloaded_path TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE media_cache ADD COLUMN channel_title TEXT")
+    except sqlite3.OperationalError:
+        pass
     
     # 2. Tasks: The active download queue
     cursor.execute("""
@@ -44,6 +57,9 @@ def init_db():
     
     conn.commit()
     conn.close()
+
+# Auto-initialize DB on import
+init_db()
 
 # --- TASK MANAGEMENT ---
 
@@ -139,20 +155,29 @@ def cache_media_list(channel_id, messages_dict):
     # Normalize channel ID
     c_id = str(channel_id).replace("-100", "", 1)
     
+    try:
+        from ui.views.settings_view import load_config
+        cfg = load_config()
+        prefix_date = cfg.get("prefix_file_date", True)
+    except Exception:
+        prefix_date = True
+        
     # We use a batch transaction for speed
     for category, msgs in messages_dict.items():
         for m in msgs:
             # We don't save raw telethon objects, just the essentials
-            m_title = "Unknown File"
+            m_title = get_media_filename(m, prefix_date=prefix_date)
             m_size = 0
             if hasattr(m, 'file') and m.file:
-                m_title = m.file.name or f"File_{m.id}{m.file.ext}"
-                m_size = m.file.size
+                m_size = getattr(m.file, 'size', 0)
+            elif hasattr(m, 'document') and m.document:
+                m_size = getattr(m.document, 'size', 0)
             elif hasattr(m, 'photo') and m.photo:
-                m_title = f"Photo_{m.id}.jpg"
                 # Find size from photo.sizes
-                if hasattr(m.photo, 'sizes'):
+                if hasattr(m.photo, 'sizes') and m.photo.sizes:
                     m_size = m.photo.sizes[-1].size if hasattr(m.photo.sizes[-1], 'size') else 0
+            elif hasattr(m, 'size'):
+                m_size = m.size
 
             cursor.execute("""
             INSERT INTO media_cache (msg_id, channel_id, media_type, title, size, date)
@@ -186,7 +211,40 @@ def mark_media_completed(channel_id, msg_id):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     c_id = str(channel_id).replace("-100", "", 1)
-    cursor.execute("UPDATE media_cache SET completed=1 WHERE msg_id=? AND channel_id=?", (msg_id, c_id))
+    cursor.execute("""
+    INSERT INTO media_cache (msg_id, channel_id, completed)
+    VALUES (?, ?, 1)
+    ON CONFLICT(msg_id, channel_id) DO UPDATE SET completed=1
+    """, (msg_id, c_id))
+    conn.commit()
+    conn.close()
+
+def unmark_media_completed(channel_id, msg_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    c_id = str(channel_id).replace("-100", "", 1)
+    cursor.execute("UPDATE media_cache SET completed=0 WHERE msg_id=? AND channel_id=?", (msg_id, c_id))
+    conn.commit()
+    conn.close()
+
+def get_media_downloaded_path(channel_id, msg_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    c_id = str(channel_id).replace("-100", "", 1)
+    cursor.execute("SELECT downloaded_path FROM media_cache WHERE msg_id=? AND channel_id=?", (msg_id, c_id))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def update_media_downloaded_path(channel_id, msg_id, downloaded_path):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    c_id = str(channel_id).replace("-100", "", 1)
+    cursor.execute("""
+    INSERT INTO media_cache (msg_id, channel_id, downloaded_path)
+    VALUES (?, ?, ?)
+    ON CONFLICT(msg_id, channel_id) DO UPDATE SET downloaded_path=excluded.downloaded_path
+    """, (msg_id, c_id, downloaded_path))
     conn.commit()
     conn.close()
 
@@ -198,6 +256,81 @@ def get_completed_state_db():
     res = set(cursor.fetchall())
     conn.close()
     return res
+
+def get_all_completed_media(channel_id=None, category=None, search=None):
+    """Retrieves completed downloaded media from SQLite with optional filtering."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    query = """
+    SELECT m.*, 
+           COALESCE(m.channel_title, t.title, m.channel_id) as resolved_channel_title 
+    FROM media_cache m
+    LEFT JOIN tasks t ON t.channel_input LIKE '%' || m.channel_id || '%'
+    WHERE m.completed=1
+    """
+    params = []
+    
+    if channel_id and channel_id != "all":
+        c_id = str(channel_id).replace("-100", "", 1)
+        query += " AND m.channel_id=?"
+        params.append(c_id)
+        
+    if category and category != "all":
+        query += " AND m.media_type=?"
+        params.append(category)
+        
+    if search:
+        query += " AND (m.title LIKE ? OR m.downloaded_path LIKE ? OR CAST(m.msg_id AS TEXT) LIKE ? OR m.channel_title LIKE ?)"
+        term = f"%{search}%"
+        params.extend([term, term, term, term])
+        
+    query += " GROUP BY m.msg_id, m.channel_id ORDER BY m.date DESC, m.msg_id DESC"
+    cursor.execute(query, params)
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+def delete_media_cache_item(channel_id, msg_id):
+    """Deletes an item from the media cache database."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    c_id = str(channel_id).replace("-100", "", 1)
+    cursor.execute("DELETE FROM media_cache WHERE msg_id=? AND channel_id=?", (msg_id, c_id))
+    conn.commit()
+    conn.close()
+
+def delete_multiple_media_cache_items(items):
+    """Deletes multiple items from media_cache. items is list of (channel_id, msg_id)."""
+    if not items:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    for channel_id, msg_id in items:
+        c_id = str(channel_id).replace("-100", "", 1)
+        cursor.execute("DELETE FROM media_cache WHERE msg_id=? AND channel_id=?", (msg_id, c_id))
+    conn.commit()
+    conn.close()
+
+def get_cached_channels_summary():
+    """Returns a list of distinct channel summaries with titles and item counts from media cache."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+    SELECT m.channel_id, 
+           COALESCE(MAX(m.channel_title), MAX(t.title), m.channel_id) as channel_title,
+           COUNT(*) as count, 
+           SUM(m.size) as total_size 
+    FROM media_cache m
+    LEFT JOIN tasks t ON t.channel_input LIKE '%' || m.channel_id || '%'
+    WHERE m.completed=1 
+    GROUP BY m.channel_id
+    ORDER BY count DESC
+    """)
+    rows = [dict(channel_id=r[0], channel_title=r[1], count=r[2], total_size=r[3]) for r in cursor.fetchall()]
+    conn.close()
+    return rows
 
 def migrate_json_to_db():
     from resource_utils import get_project_root

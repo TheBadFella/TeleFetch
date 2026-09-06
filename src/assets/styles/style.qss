@@ -55,7 +55,7 @@ QWidget#Sidebar QToolButton {
     border: none;
     text-align: center;
     padding: 8px 1px;
-    font-size: 8.5pt;
+    font-size: 11px;
     font-weight: 600;
     border-radius: 8px;
     margin: 4px 3px;
@@ -111,7 +111,7 @@ QLabel#ControlLabel {
 
 QLabel#MutedText {
     color: #64748B;
-    font-size: 8.5pt;
+    font-size: 11px;
 }
 
 QLabel#SectionHeader {
@@ -160,7 +160,7 @@ QLabel#CardTitle {
 
 QLabel#StatusBadge {
     font-weight: 700;
-    font-size: 8.5pt;
+    font-size: 11px;
     padding: 2px 8px;
     border-radius: 4px;
 }
@@ -182,7 +182,7 @@ QLabel#TypePill {
     color: #0284C7; /* Blue-600 */
     border-radius: 4px;
     padding: 3px 8px;
-    font-size: 8.5pt;
+    font-size: 11px;
     font-weight: 600;
 }
 
@@ -204,10 +204,14 @@ QPushButton#CardButtonCompact {
     background-color: #F1F5F9;
     border: 1px solid #CBD5E1;
     border-radius: 5px;
-    color: #334155;
-    font-size: 12px;
-    padding: 2px;
-    min-height: 28px;
+    color: #1E293B;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    min-height: 24px;
+}
+QPushButton#CardButtonCompact:hover {
+    background-color: #E2E8F0;
 }
 
 QPushButton#ExpandButton {
@@ -292,7 +296,7 @@ QProgressBar {
     border-radius: 5px;
     color: #475569; /* Dark gray for better contrast on light background */
     font-weight: bold;
-    font-size: 8.5pt;
+    font-size: 11px;
 }
 
 /* Calendar/Date Picker */
@@ -379,7 +383,7 @@ QLabel#MediaItemTitle {
     color: #1E293B;
 }
 QLabel#MediaItemMeta {
-    font-size: 8.5pt;
+    font-size: 11px;
     color: #64748B;
 }
 QLabel#SizeBadge {
@@ -387,7 +391,7 @@ QLabel#SizeBadge {
     color: #0284C7;
     border-radius: 4px;
     padding: 2px 8px;
-    font-size: 8.5pt;
+    font-size: 11px;
     font-weight: 700;
 }
 
@@ -482,6 +486,30 @@ QStatusBar::item {
 }
 QStatusBar QLabel {
     color: #64748B;
-    font-size: 8.5pt;
+    font-size: 11px;
     font-weight: 600;
+}
+
+/* File Table */
+QTableWidget#FileTable {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+    gridline-color: #F1F5F9;
+    color: #1E293B;
+    selection-background-color: #F1F5F9;
+    selection-color: #1E293B;
+}
+QTableWidget#FileTable::item {
+    padding: 6px;
+    border-bottom: 1px solid #F1F5F9;
+}
+QTableWidget#FileTable QHeaderView::section {
+    background-color: #F8FAFC;
+    color: #64748B;
+    font-weight: 700;
+    font-size: 12px;
+    border: none;
+    border-bottom: 2px solid #E2E8F0;
+    padding: 8px 6px;
 }

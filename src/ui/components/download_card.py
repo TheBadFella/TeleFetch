@@ -307,12 +307,23 @@ class DownloadCard(QWidget):
                 if size < 1024: return f"{size:.1f} {unit}"
                 size /= 1024
             return f"{size:.1f} GB"
-        for idx, meta in enumerate(self.files_metadata):
+            
+        max_visible = 100
+        for idx, meta in enumerate(self.files_metadata[:max_visible]):
             row = FileRow(meta["id"], meta["name"], fmt(meta["size"]), idx)
             if meta.get("completed"):
                 row.set_completed()
             self.files_layout.addWidget(row)
             self.file_rows[meta["id"]] = row
+            
+        if len(self.files_metadata) > max_visible:
+            from PySide6.QtWidgets import QLabel
+            more_count = len(self.files_metadata) - max_visible
+            lbl_more = QLabel(f"◈ ... and {more_count} more files in queue ...")
+            lbl_more.setObjectName("MutedText")
+            lbl_more.setAlignment(Qt.AlignCenter)
+            lbl_more.setStyleSheet("padding: 8px; font-style: italic; color: #888;")
+            self.files_layout.addWidget(lbl_more)
 
     def update_file_progress(self, msg_id, current_bytes, total_bytes, speed_str):
         self.lbl_status_text.setText(f"⬇ {speed_str}")
@@ -329,9 +340,11 @@ class DownloadCard(QWidget):
         else:
             self.last_speed_val = 0
 
-        self.lbl_status_text.setProperty("state", "active")
-        self.lbl_status_text.style().unpolish(self.lbl_status_text)
-        self.lbl_status_text.style().polish(self.lbl_status_text)
+        if self.lbl_status_text.property("state") != "active":
+            self.lbl_status_text.setProperty("state", "active")
+            self.lbl_status_text.style().unpolish(self.lbl_status_text)
+            self.lbl_status_text.style().polish(self.lbl_status_text)
+            
         if msg_id in self.file_rows:
             self.file_rows[msg_id].set_progress(current_bytes, total_bytes)
 
@@ -377,44 +390,83 @@ class DownloadCard(QWidget):
         self.btn_verify.setEnabled(False)
         self.btn_verify.setText("🛡️ Verifying...")
         self.lbl_verify_status.setVisible(True)
-        self.lbl_verify_status.setText("Checking file integrity...")
+        self.lbl_verify_status.setText("Checking file integrity against disk...")
         
-        # We'll do a basic size check first locally
+        from database import unmark_media_completed, mark_media_completed, get_media_downloaded_path
+        c_id = self.task_id.split('_')[0].replace("-100", "", 1)
+        
         corrupt = 0
         missing = 0
         valid = 0
         
         for msg_id, row in self.file_rows.items():
-            # Find metadata
             meta = next((m for m in self.files_metadata if m["id"] == msg_id), None)
-            if not meta: continue
+            if not meta:
+                continue
             
             fpath = os.path.join(self.folder_name, meta["name"])
+            if not os.path.exists(fpath):
+                db_filename = get_media_downloaded_path(c_id, msg_id)
+                if db_filename:
+                    candidate = os.path.join(self.folder_name, db_filename) if not os.path.isabs(db_filename) else db_filename
+                    if os.path.exists(candidate):
+                        fpath = candidate
+
             if not os.path.exists(fpath):
                 missing += 1
                 row.icon.setText("❓")
                 row.bar.setProperty("state", "idle")
+                try:
+                    unmark_media_completed(c_id, msg_id)
+                except Exception:
+                    pass
             else:
                 actual_size = os.path.getsize(fpath)
                 if meta["size"] > 0 and actual_size != meta["size"]:
                     corrupt += 1
                     row.icon.setText("⚠️")
                     row.bar.setProperty("state", "paused")
+                    try:
+                        unmark_media_completed(c_id, msg_id)
+                    except Exception:
+                        pass
                 else:
                     valid += 1
                     row.icon.setText("✅")
                     row.bar.setProperty("state", "completed")
+                    try:
+                        mark_media_completed(c_id, msg_id)
+                    except Exception:
+                        pass
             row.bar.style().unpolish(row.bar)
             row.bar.style().polish(row.bar)
             
+        self.completed = valid
+        self.batch_progress_bar.setValue(valid)
+        self.lbl_status.setText(f"Downloaded {valid} out of {self.total_items} items")
+
         if corrupt > 0 or missing > 0:
-            self.lbl_verify_status.setText(f"Done: {valid} OK, {corrupt} Corrupt, {missing} Missing")
-            self.lbl_verify_status.setStyleSheet("color: #EF4444;") # Red
-            self.btn_verify.setText("🛡️ Fix 0%?") # Mock button text change
+            total_bad = missing + corrupt
+            self.lbl_verify_status.setText(f"Found {total_bad} missing/incomplete files. Click Resume to download.")
+            self.lbl_verify_status.setStyleSheet("color: #F59E0B;")
+            self.btn_pause.setEnabled(True)
+            self.btn_pause.setText("▶ Resume")
+            self.is_paused = True
+            self.lbl_status_text.setText("Paused")
+            self.lbl_status_text.setProperty("state", "paused")
+            self.batch_progress_bar.setProperty("state", "paused")
         else:
-            self.lbl_verify_status.setText("All files verified successfully!")
-            self.lbl_verify_status.setStyleSheet("color: #10B981;") # Green
-            
+            self.lbl_verify_status.setText(f"All {valid} files verified successfully!")
+            self.lbl_verify_status.setStyleSheet("color: #10B981;")
+            if self.total_items > 0 and valid >= self.total_items:
+                self._set_completed_style()
+                self.btn_pause.setEnabled(False)
+
+        self.lbl_status_text.style().unpolish(self.lbl_status_text)
+        self.lbl_status_text.style().polish(self.lbl_status_text)
+        self.batch_progress_bar.style().unpolish(self.batch_progress_bar)
+        self.batch_progress_bar.style().polish(self.batch_progress_bar)
+
         self.btn_verify.setEnabled(True)
         self.btn_verify.setText("🛡️ Verify")
 
@@ -479,10 +531,11 @@ class FileRow(QWidget):
         if total:
             pct = int(current * 100 / total)
             self.bar.setValue(pct)
-        self.bar.setProperty("state", "active")
-        self.bar.style().unpolish(self.bar)
-        self.bar.style().polish(self.bar)
-        self.icon.setText("⬇️")
+        if self.bar.property("state") != "active":
+            self.bar.setProperty("state", "active")
+            self.bar.style().unpolish(self.bar)
+            self.bar.style().polish(self.bar)
+            self.icon.setText("⬇️")
 
     def set_completed(self):
         self.bar.setValue(100)

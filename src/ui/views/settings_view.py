@@ -107,6 +107,11 @@ def load_config():
         "download_limit": 5,
         "initial_fetch_limit": 2000,
         "max_speed_kb": 0,
+        "forum_auto_separation": False,
+        "rename_duplicates": True,
+        "use_message_date": True,
+        "prefix_file_date": True,
+        "redownload_deleted": False,
         "dark_mode": None,  # None = follow Windows system setting
         "proxy": {
             "enabled": False,
@@ -199,7 +204,7 @@ class SettingsView(QWidget):
 
         path_row = QHBoxLayout()
         self.input_path = QLineEdit("downloads")
-        self.input_path.setReadOnly(True)
+        self.input_path.setReadOnly(False)
         self.input_path.setFixedHeight(36)
         
         self.btn_browse = QPushButton("Browse Folder")
@@ -215,9 +220,29 @@ class SettingsView(QWidget):
         path_row.addWidget(self.btn_open)
         self.clayout.addLayout(path_row)
 
-        lbl_template_tip = QLabel("💡 <b>Dynamic variables supported</b>: {channel}, {category}, {year}, {month}, {day}")
+        lbl_template_tip = QLabel("💡 <b>Dynamic variables supported</b>: {channel}, {username}, {channel_id}, {category}, {year}, {month}, {day}")
         lbl_template_tip.setObjectName("MutedText")
         self.clayout.addWidget(lbl_template_tip)
+
+        self.chk_forum_sep = QCheckBox("Enable Forum Topic Auto-separation")
+        self.chk_forum_sep.setToolTip("Automatically download all topics from a forum into separate subfolders named after the topics.")
+        self.clayout.addWidget(self.chk_forum_sep)
+
+        self.chk_rename_duplicates = QCheckBox("Rename Duplicate Filenames")
+        self.chk_rename_duplicates.setToolTip("Automatically append suffix (2, 3, etc.) to duplicate filenames instead of overwriting existing files.")
+        self.clayout.addWidget(self.chk_rename_duplicates)
+
+        self.chk_use_msg_date = QCheckBox("Set File Date to Message Date")
+        self.chk_use_msg_date.setToolTip("Set the file's modified and created times to match the date and time when the message was sent to the chat.")
+        self.clayout.addWidget(self.chk_use_msg_date)
+
+        self.chk_prefix_file_date = QCheckBox("Prefix Filenames with Publication Date (YYYY-MM-DD)")
+        self.chk_prefix_file_date.setToolTip("Prepend the message publication date (e.g. 2026-01-01_filename.mp4) to all downloaded media for tidy chronological organization.")
+        self.clayout.addWidget(self.chk_prefix_file_date)
+
+        self.chk_redownload_deleted = QCheckBox("Re-download Files If Deleted/Moved from Folder")
+        self.chk_redownload_deleted.setToolTip("When enabled, if a downloaded file is moved or deleted from the destination folder, it will be re-downloaded on the next run. When disabled (recommended if you organize files into other folders), downloaded items are remembered by the database and won't be re-downloaded.")
+        self.clayout.addWidget(self.chk_redownload_deleted)
 
         self.clayout.addWidget(self._create_divider())
 
@@ -358,6 +383,11 @@ class SettingsView(QWidget):
         self.spin_limit.setValue(config.get("download_limit", 5))
         self.spin_fetch_limit.setValue(config.get("initial_fetch_limit", 2000))
         self.spin_speed.setValue(config.get("max_speed_kb", 0))
+        self.chk_forum_sep.setChecked(config.get("forum_auto_separation", False))
+        self.chk_rename_duplicates.setChecked(config.get("rename_duplicates", True))
+        self.chk_use_msg_date.setChecked(config.get("use_message_date", True))
+        self.chk_prefix_file_date.setChecked(config.get("prefix_file_date", True))
+        self.chk_redownload_deleted.setChecked(config.get("redownload_deleted", False))
         
         proxy = config.get("proxy", {})
         self.chk_enable_proxy.setChecked(proxy.get("enabled", False))
@@ -373,6 +403,11 @@ class SettingsView(QWidget):
             "download_limit": self.spin_limit.value(),
             "initial_fetch_limit": self.spin_fetch_limit.value(),
             "max_speed_kb": self.spin_speed.value(),
+            "forum_auto_separation": self.chk_forum_sep.isChecked(),
+            "rename_duplicates": self.chk_rename_duplicates.isChecked(),
+            "use_message_date": self.chk_use_msg_date.isChecked(),
+            "prefix_file_date": self.chk_prefix_file_date.isChecked(),
+            "redownload_deleted": self.chk_redownload_deleted.isChecked(),
             "proxy": {
                 "enabled": self.chk_enable_proxy.isChecked(),
                 "type": self.combo_proxy_type.currentText(),
@@ -385,6 +420,18 @@ class SettingsView(QWidget):
             PROXY_USER_ENV_KEY: self.input_proxy_user.text(),
             PROXY_PASS_ENV_KEY: self.input_proxy_pass.text()
         })
+
+        # Sync existing database tasks with updated limits
+        try:
+            import sqlite3
+            from database import DB_PATH
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("UPDATE tasks SET max_speed_kb=?, download_limit=?", (self.spin_speed.value(), self.spin_limit.value()))
+            conn.commit()
+            conn.close()
+        except Exception: pass
+
         # Notify user it was saved properly
         QMessageBox.information(self, "Settings Saved", "Configuration saved successfully!")
 

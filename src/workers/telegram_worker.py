@@ -16,6 +16,7 @@ from core_downloader import (
     save_active_tasks,
     parse_channel_input
 )
+from utils.file_utils import get_media_filename
 from resource_utils import get_project_root
 
 class WorkerSignals(QObject):
@@ -466,16 +467,16 @@ class TelegramWorker(QThread):
             }, 0)
 
             # 3. Fetch real messages (this takes time)
-            messages = await get_messages_by_type(self.client, channel, media_id, topic_id=topic_id)
-            
-            # Filter if specific messages were selected
             if selected_message_ids is not None:
-                messages = [m for m in messages if m.id in selected_message_ids]
+                # Fast path: directly fetch selected messages
+                raw_messages = await self.client.get_messages(channel, ids=selected_message_ids)
+                # Client.get_messages with ids can return None for deleted/inaccessible messages
+                messages = [m for m in raw_messages if m is not None]
+            else:
+                # Unbounded bulk fetch for entire categories
+                messages = await get_messages_by_type(self.client, channel, media_id, limit=None, topic_id=topic_id)
             
             all_messages_count = len(messages)
-            messages_to_download = [m for m in messages if m.id not in downloaded_state]
-            total_items = all_messages_count
-            completed_initial = all_messages_count - len(messages_to_download)
             
             base_folder_map = {1: "images", 2: "videos", 3: "pdfs", 4: "zips", 5: "audio", 6: "all_media"}
             category_name = base_folder_map.get(media_id, "all_media")
@@ -483,7 +484,7 @@ class TelegramWorker(QThread):
                 category_name = os.path.join(category_name, f"topic_{topic_id}")
             
             # 📂 Dynamic Path Templating
-            # Supported: {channel}, {category}, {year}, {month}, {day}
+            # Supported: {channel}, {category}, {year}, {month}, {day}, {username}, {channel_id}
             from datetime import datetime
             now_dt = datetime.now()
             
@@ -493,13 +494,83 @@ class TelegramWorker(QThread):
                 template = os.path.join(template, "{channel}", "{category}")
             
             safe_title = "".join([c if c.isalnum() or c in (' ', '-', '_') else '_' for c in title])
+            username_str = getattr(channel, 'username', '') or ''
+            safe_username = "".join([c if c.isalnum() or c in ('-', '_') else '_' for c in username_str])
+            if not safe_username:
+                safe_username = safe_title
+            
+            safe_channel_id = "".join([c if c.isalnum() or c in ('-', '_') else '_' for c in resolved_chan_id])
+            
+            from ui.views.settings_view import load_config
+            cfg = load_config()
+            forum_auto_separation = cfg.get("forum_auto_separation", False)
+
+            msg_folder_resolver = None
+            
+            # If it's a forum and auto-separation is enabled and we are not in a specific topic
+            if forum_auto_separation and getattr(channel, 'forum', False) and topic_id is None:
+                topic_map = {}
+                try:
+                    from telethon.tl.functions.channels import GetForumTopicsRequest
+                    forums = await self.client(GetForumTopicsRequest(
+                        channel=channel,
+                        offset_date=None,
+                        offset_id=0,
+                        offset_topic=0,
+                        limit=500
+                    ))
+                    if forums and getattr(forums, 'topics', None):
+                        for t_obj in forums.topics:
+                            topic_map[t_obj.id] = t_obj.title
+                except Exception as fe:
+                    print(f"Error fetching forum topics: {fe}")
+
+                def resolver(message):
+                    # Find topic ID
+                    reply_to = getattr(message, 'reply_to', None)
+                    msg_topic_id = None
+                    if reply_to:
+                        if getattr(reply_to, 'forum_topic', False) or getattr(reply_to, 'reply_to_top_id', None) is not None:
+                            msg_topic_id = getattr(reply_to, 'reply_to_top_id', None) or getattr(reply_to, 'reply_to_msg_id', None)
+                    
+                    # Determine category subfolder name
+                    base_folder_map = {1: "images", 2: "videos", 3: "pdfs", 4: "zips", 5: "audio", 6: "all_media"}
+                    category_name = base_folder_map.get(media_id, "all_media")
+                    
+                    if msg_topic_id is not None:
+                        topic_title = topic_map.get(msg_topic_id, None)
+                        if topic_title:
+                            safe_topic_title = "".join([c if c.isalnum() or c in (' ', '-', '_') else '_' for c in topic_title])
+                            topic_subfolder = safe_topic_title
+                        else:
+                            topic_subfolder = f"topic_{msg_topic_id}"
+                            category_name = os.path.join(category_name, topic_subfolder)
+                    
+                    msg_folder = template.format(
+                        channel=safe_title,
+                        category=category_name,
+                        year=now_dt.strftime("%Y"),
+                        month=now_dt.strftime("%m"),
+                        day=now_dt.strftime("%d"),
+                        username=safe_username,
+                        channel_id=safe_channel_id
+                    )
+                    
+                    if not os.path.isabs(msg_folder):
+                        msg_folder = os.path.abspath(msg_folder)
+                    os.makedirs(msg_folder, exist_ok=True)
+                    return msg_folder
+
+                msg_folder_resolver = resolver
             
             folder_name = template.format(
                 channel=safe_title,
                 category=category_name,
                 year=now_dt.strftime("%Y"),
                 month=now_dt.strftime("%m"),
-                day=now_dt.strftime("%d")
+                day=now_dt.strftime("%d"),
+                username=safe_username,
+                channel_id=safe_channel_id
             )
             
             os.makedirs(folder_name, exist_ok=True)
@@ -507,6 +578,40 @@ class TelegramWorker(QThread):
             # Ensure folder_name is absolute or correctly rooted
             if not os.path.isabs(folder_name):
                 folder_name = os.path.abspath(folder_name)
+
+            # 🛡️ Verify physical disk presence for downloaded files (support re-download if deleted)
+            redownload_deleted = cfg.get("redownload_deleted", False)
+            if redownload_deleted:
+                from database import get_media_downloaded_path, unmark_media_completed
+                prefix_file_date = cfg.get("prefix_file_date", True)
+                actual_downloaded_state = set()
+                c_id = str(resolved_chan_id).replace("-100", "", 1)
+                for msg in messages:
+                    fname = get_media_filename(msg, prefix_date=prefix_file_date)
+                    target_f = msg_folder_resolver(msg) if msg_folder_resolver else folder_name
+                    fpath = os.path.join(target_f, fname) if fname else None
+                    if fpath and not os.path.exists(fpath):
+                        db_fn = get_media_downloaded_path(c_id, msg.id)
+                        if db_fn:
+                            cand = os.path.join(target_f, db_fn) if not os.path.isabs(db_fn) else db_fn
+                            if os.path.exists(cand):
+                                fpath = cand
+                    
+                    # Check if file really exists on disk with non-zero bytes
+                    if msg.id in downloaded_state and fpath and os.path.exists(fpath) and os.path.getsize(fpath) > 0:
+                        actual_downloaded_state.add(msg.id)
+                    elif msg.id in downloaded_state:
+                        # File was deleted from disk! Unmark in DB
+                        try:
+                            unmark_media_completed(c_id, msg.id)
+                        except Exception:
+                            pass
+
+                downloaded_state = actual_downloaded_state
+            
+            messages_to_download = [m for m in messages if m.id not in downloaded_state]
+            total_items = all_messages_count
+            completed_initial = len(downloaded_state)
 
             # 4. Emit the REAL metadata to update the placeholder card
             self.signals.channel_fetched.emit({
@@ -540,25 +645,23 @@ class TelegramWorker(QThread):
             
             # Build actual files_metadata for current messages
             files_metadata = []
+            prefix_file_date = cfg.get("prefix_file_date", True)
             for msg in messages:
-                fname = f"Message_{msg.id}"
+                fname = get_media_filename(msg, prefix_date=prefix_file_date)
                 fsize = 0
                 try:
                     if getattr(msg, 'document', None):
-                        file_ext = ""
-                        if hasattr(msg, 'file') and msg.file:
-                            fname = msg.file.name or fname
-                            file_ext = msg.file.ext or ""
-                        if fname == f"Message_{msg.id}":
-                            fname = f"Document_{msg.id}{file_ext}"
                         fsize = getattr(msg.document, 'size', 0)
                     elif getattr(msg, 'photo', None):
-                        fname = f"Photo_{msg.id}.jpg"
                         if hasattr(msg.photo, 'sizes') and msg.photo.sizes:
                             for s in reversed(msg.photo.sizes):
                                 if hasattr(s, 'size'):
                                     fsize = s.size
                                     break
+                    elif getattr(msg, 'file', None) and getattr(msg.file, 'size', None):
+                        fsize = msg.file.size
+                    elif getattr(msg, 'size', None):
+                        fsize = msg.size
                 except Exception: pass
 
                 files_metadata.append({
@@ -607,8 +710,8 @@ class TelegramWorker(QThread):
 
             completed_count = [completed_initial]
 
-            def on_file_complete(msg_id, paused=False, filepath=None):
-                if not paused:
+            def on_file_complete(msg_id, paused=False, filepath=None, error=False):
+                if not paused and not error:
                     self.signals.file_completed.emit(task_id, msg_id)
                     completed_count[0] += 1
                     self.signals.download_progress.emit(task_id, completed_count[0], total_items)
@@ -636,7 +739,8 @@ class TelegramWorker(QThread):
                 progress_cb=on_file_progress,
                 complete_cb=on_file_complete,
                 task_cancel_event=global_cancel_event,
-                max_speed_kb=max_speed_kb if max_speed_kb > 0 else None
+                max_speed_kb=max_speed_kb if max_speed_kb > 0 else None,
+                msg_folder_resolver=msg_folder_resolver
             )
             
             if task_id in self.running_tasks:

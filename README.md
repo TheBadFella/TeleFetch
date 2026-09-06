@@ -19,12 +19,26 @@ Eliminated cross-channel ID collisions. Download completion and selection status
 ### 🎨 Theme-Aware Context Menus
 Context menus (Right-Click) now dynamically adopt the application's theme, providing a consistent premium experience in both Light and Dark modes.
 
+### 📁 Downloaded Files Manager
+A dedicated **Files** management dashboard allowing you to search, filter, and organize all completed downloads. Easily open files, show them in File Explorer, remove items from download history, or permanently delete files from disk with multi-select bulk operations.
+
+### ⚡ FastTelethon Multi-Part Turbo Downloader
+Equipped with parallel chunk streaming (4 worker connections x 512 KB chunks) for media files > 1 MB, achieving maximum network throughput and up to 10x–20x faster download speeds.
+
+### 🔄 Smart Re-Download of Deleted Files
+Built-in physical disk presence verification. If you delete any files or folders from your computer, the app detects the missing files and allows you to re-download them seamlessly.
+
+### 📅 Publication Date Media Naming
+All downloaded media (images, videos, documents, audio) can now be automatically prefixed with their publication date (e.g. `2026-01-01_filename.mp4` or `2026-01-01_Photo_123.jpg`), replacing random numeric document IDs for videos and keeping download folders organized chronologically.
+
 ---
 
 ## Features
 
+- 📁 **File Manager** — dedicated management tab to view, search, open, and delete downloaded items
+- ⚡ **FastTelethon Turbo Engine** — multi-part parallel chunk streaming for ultra-fast downloads
 - 💎 **Premium Sidebar** — sleek, icon-based navigation with professional typography
-- 📊 **Global Dashboard Status** — real-time session stats, total progress %, and combined speed
+- 📊 **Global Dashboard Status** — real-time session stats, total progress %, and smoothed combined speed
 - 🔔 **Native Notifications** — system-level alerts when your downloads are ready
 - 🖱 **Intuitive Gestures** — double-click cards to open folders; auto-focus search on open
 - 🔄 **Queue Prioritization** — move entire download batches up or down to manage your queue
@@ -33,13 +47,14 @@ Context menus (Right-Click) now dynamically adopt the application's theme, provi
 - 📥 **Empty State Screens** — friendly placeholders on Home and Downloads before any tasks are added
 - 📂 **Media Browser** — category-based file browser (Media, Files, Music, Links, GIFs)
 - ⚡ **Parallel Fetch** — all categories load simultaneously via `asyncio.gather` (~5x faster)
-- 🔁 **Smart Deduplication** — skips already-downloaded files by name and size
+- 🔁 **Smart Deduplication** — skips already-downloaded files by name and size with physical disk checks
+- 📅 **Publication Date Naming** — automatically prefix files with `YYYY-MM-DD` and cleanly name untitled videos/photos
 - ⏸ **Concurrent Downloads** — configurable parallel streams with pause / resume support
-- 📊 **Per-file Progress Bars** — live speed display (KB/s / MB/s) per file
+- 📊 **Per-file Progress Bars** — live speed display (KB/s / MB/s) with EMA smoothing
 - **Speed Limiter** — configurable max download speed in Settings
 - **Proxy Support** — SOCKS4, SOCKS5, HTTP, and MTProto configuration
 - **Theme Toggle** — Light and Dark mode with persistent session saving
-- **Persistent Queue** — saves and restores on restart automatically
+- **Persistent Queue** — saves and restores on restart automatically with SQLite
 - **Cross-Platform** — standalone executables for Windows, Linux, and macOS
 
 ---
@@ -52,15 +67,18 @@ Context menus (Right-Click) now dynamically adopt the application's theme, provi
 </p>
 
 <p align="center">
-  <img src="screenshots/screenshot_v2.6.3/home_v2.6.3.png" width="800" alt="Home View">
+  <img src="screenshots/screenshot_v2.4.1/media_selection.png" width="800" alt="Media Selection">
 </p>
 
 <p align="center">
-  <img src="screenshots/screenshot_v2.6.3/download_queue_v2.6.3.png" width="800" alt="Download Queue">
+  <img src="screenshots/screenshot_v2.4.1/download_card_v2.4.1.png" width="800" alt="Download Queue">
+</p>
+<p align="center">
+  <img src="screenshots/screenshot_v2.4.1/download_queue_v2.4.1.png" width="800" alt="Download Queue">
 </p>
 
 <p align="center">
-  <img src="screenshots/screenshot_v2.6.3/settings_v2.6.3.png" width="800" alt="Settings View">
+  <img src="screenshots/screenshot_v2.4.1/settingsv2.4.1.png" width="800" alt="Settings View">
 </p>
 
 ---
@@ -118,6 +136,7 @@ Context menus (Right-Click) now dynamically adopt the application's theme, provi
 4. Browse files by category — use **Select All** or check individual files.
 5. Click **Download Selected** to add them to your queue.
 6. Track live progress, total queue stats, and session throughput in the **Downloads** tab.
+7. Manage your completed downloads in the **Files** tab (open files, show in explorer, delete from list or disk).
 
 ### Resuming Downloads
 
@@ -130,6 +149,48 @@ Go to **Settings → Download Limit** to adjust how many files download simultan
 ---
 
 ## Changelog
+
+### v2.8.2
+- ⚡ **Resuming Stall & Concurrency Deadlock Fix**: Resolved the critical issue where parallel downloads permanently froze at `Resuming...` with 0 B/s due to missing MTProto request timeouts. Added a 25s timeout with exponential retry backoff to prevent dropped connections from locking worker coroutines and exhausting concurrency slots.
+- 📦 **Instant Complete `.part` File Finalization**: Implemented instant detection and atomic finalization for `.part` files matching the expected Telegram media size. Automatically flushes file handles, atomically replaces `.part` to final filenames with Windows file-lock retry handling, and marks database records completed.
+- 🔄 **Byte-Range Resumable Chunk Tracking**: Added `.part.meta` chunk-state sidecars to record downloaded chunk indices. Paused or interrupted downloads now accurately download only missing chunks upon resume without wiping or corrupting existing progress.
+- 🏷️ **Deduplication Filename Stability**: Fixed duplicate filename generation so that restarting or resuming a task reuses its existing in-progress `.part` filename instead of repeatedly appending `(2)`, `(3)`, etc.
+- 🛡️ **Verify & Persistence Reconciliation**: Enhanced the "🛡️ Verify" button to check both primary file paths and database paths against disk. If files are deleted or moved, it cleanly reconciles database completion counters, updates progress bars, and enables the "▶ Resume" button for 1-click re-downloading.
+
+### v2.8.1
+- 🛡️ **Concurrent Duplicate Renaming Fix**: Resolved parallel download race conditions in `get_unique_filepath` by dynamically reserving in-flight filenames and detecting `.part` files, preventing simultaneous duplicate downloads from colliding or abandoning `.part` files.
+- ⚙️ **Configurable Moved/Deleted Files Re-download**: Added a toggle under Download Settings (`"Re-download Files If Deleted/Moved from Folder"`, default disabled) so moving completed downloads to other folders or drives won't trigger unwanted re-downloads.
+- 🧹 **FastTelethon Error Cleanup**: Added automatic removal of `.part` temporary files on download failure or cancellation.
+
+### v2.8.0
+- 📁 **Dedicated File Manager**: Added a full-featured "Files" tab in the sidebar to manage your download list, search and filter files by category/status, view total disk usage, open files/folders directly, and delete items from history or disk.
+- ⚡ **FastTelethon Turbo Multi-Part Downloader**: Integrated high-speed parallel chunk streaming (4 worker streams x 512KB chunks) for large files (>1 MB), providing up to 10x–20x faster download throughput.
+- 🔄 **Re-downloading Deleted Files**: Added physical disk presence scanning (`os.path.exists`) so deleting files/folders from your computer allows them to be re-downloaded seamlessly rather than getting stuck in a false completed state.
+- 📊 **Silky-Smooth Speed Tracking**: Implemented Exponential Moving Average (EMA) speed smoothing to eliminate erratic speed jumping in the UI.
+- 🛡️ **Multi-Category Bulk Download Fix**: Fixed ghost card collisions and category filtering in bulk mode.
+
+### v2.7.7
+- 📅 **Publication-Date Filename Formatting**: Added option to prefix all downloaded media (images, videos, documents, audio) with publication date (`YYYY-MM-DD_<filename>`) for tidy chronological organization.
+- 🎥 **Clean Video & Media Naming**: Replaced random Telegram 64-bit document IDs for videos without metadata names with clean, predictable identifiers (`Video_<id>.mp4` / `2026-01-01_Video_<id>.mp4`).
+- ⚙️ **GUI Config Toggle**: Added "Prefix Filenames with Publication Date (YYYY-MM-DD)" checkbox under Download Settings.
+
+### v2.7.6
+- 🔄 **Prevent File Overwriting**: Added option to rename duplicate files with a suffix (e.g. `video (2).mp4`) instead of overwriting, with persistent resume mapping in the SQLite database.
+- 📅 **Message Timestamp Matching**: Added option to automatically set downloaded media and sidecar text file modification/accessed times to match the Telegram message creation date.
+- ⚙️ **GUI Config Toggles**: Integrated both features as custom checkboxes under Download Settings.
+
+### v2.7.5
+- 📁 **Custom Folder Naming**: Support `{username}` and `{channel_id}` placeholders in the download path template settings.
+- 📂 **Forum Topic Auto-separation**: Option to automatically download all topics from a forum into separate subfolders named after the topics when the main channel ID is provided.
+
+### v2.7.1
+- 🍎 **Intel Mac Support**: Added support for Intel-based Macs (x86_64 architecture). The build workflow now produces separate `.dmg` installers for both Apple Silicon (ARM64) and Intel Macs, ensuring full compatibility across all macOS devices.
+
+
+### v2.6.7
+- 🛠️ **Fixed PhotoSize Deduplication Bug**: Fixed the `AttributeError: 'PhotoSize' object has no attribute 'location'` error that occurred during deduplication checks before download in Telethon 1.38.1.
+- 🎨 **UI Layout Improvements**: Fixed vertical alignment of the bulk download checkboxes on the "Ready for Bulk Download" page and eliminated visual stretching.
+- 🔤 **Font Warnings Fix**: Replaced point-based font sizes (`8.5pt`) with pixel-based (`11px`) in stylesheets to eliminate `QFont::setPointSize` terminal warnings and ensure consistent, cleaner font rendering.
 
 ### v2.6.6
 - 🍎 **macOS DMG Fix**: Completely refactored the macOS build process to produce a working `.dmg` installer with a proper `.app` bundle.

@@ -40,7 +40,25 @@ This document tracks the vision and high-level goals for the major **v3.0.0** re
 
 ---
 
-## ✅ Progress Summary
-- **Current Version**: 2.6.4
-- **Next Milestone**: 2.7.0 (Cleanup & Refactor)
-- **Primary Goal**: 3.0.0 (The Media Operating System)
+## ✅ Roadmap
+
+- **Current Version**: 2.8.2
+- **Completed in v2.8.2**:
+  - [x] **Resuming Stall Fix**: Added 25s MTProto request timeouts and retry recovery to prevent worker coroutines and concurrency slots from hanging indefinitely.
+  - [x] **Complete `.part` Finalization**: Instant detection and atomic replacement of full-sized `.part` files with Windows file-lock retry handling.
+  - [x] **Byte-Range Resumable Chunk Tracking**: Lightweight `.part.meta` chunk-state sidecars for clean interrupted download resumption.
+  - [x] **Deduplication Stability**: Preserved in-progress `.part` candidate names without runaway `(2)`, `(3)` duplicate suffix increments.
+  - [x] **Verify & Persistence Reconciliation**: Reconciled database completion states against filesystem with one-click Resume re-downloading.
+- **Completed in v2.8.1**:
+  - [x] **Concurrent Duplicate Renaming Fix**: In-flight file reservation & `.part` collision prevention.
+  - [x] **Configurable Moved/Deleted Files Re-download**: User setting to preserve completion state when moving files.
+  - [x] **FastTelethon Error Cleanup**: Clean up broken/orphaned `.part` files on failure or cancellation.
+- **Completed in v2.8.0**:
+  - [x] **File Manager**: Dedicated Files tab to manage the download list, search, filter, open files/folders, and delete items from history or disk.
+  - [x] **FastTelethon Parallel Downloader**: 4-worker chunk streaming (512KB chunks) for turbo download speeds.
+  - [x] **Re-downloading Deleted Files**: Automatic physical disk presence verification.
+  - [x] **Publication Date Filename Prefixing**: Date-based media naming and clean untitled video/photo naming.
+  - [x] **Custom Folder Naming**: Support `{username}` and `{channel_id}` placeholders in the download path template.
+  - [x] **Forum Auto-separation**: Option to automatically download all topics from a forum into separate subfolders named after the topics when the main channel ID is provided.
+- **Next Milestone**: 3.0.0 (The Media Operating System)
+
